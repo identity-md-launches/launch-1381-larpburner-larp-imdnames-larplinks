@@ -1,45 +1,74 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {ILARPNames} from "./ILARPNames.sol";
-import {BuysIMD} from "./BuysIMD.sol";
+import {ERC721} from "solady/tokens/ERC721.sol";
+import {Base64} from "solady/utils/Base64.sol";
+import {ILARP} from "./ILARP.sol";
+import {ILARPNames, ILARPNameRenderer} from "./ILARPNames.sol";
+import {LARPBurner} from "./LARPBurner.sol";
 import {Labels} from "./Labels.sol";
 import {SafeReads} from "./SafeReads.sol";
 
 /// @title LARP names: name.imd, by the IMD6900 frens
-/// @notice ENS-style names for identity.md: one `<label>.imd` per identity, unique, paid once, kept while the
-/// identity keeps it (it passes with the identity on a sale). Every fee buys $IMD on POOL4 and burns it.
-/// @dev No owner, no roles, no upgrades. ETH never stays here: each fee is spent in the same call.
-contract LARPNames is ILARPNames, BuysIMD {
+/// @notice ENS-style names for the IMD ecosystem, as ERC-721 NFTs. Paid once, kept forever, traded anywhere. A name
+/// shows on an identity.md its owner holds once linked, while the owner holds both. Every fee buys $IMD and burns it,
+/// through the LARP burner: the registration, the 6.9% royalty on secondary sales, and the toll a new owner pays once
+/// to link the name (so every change of hands burns, whatever the market).
+/// @dev No owner and no upgrades. The one role, the artist, can only point tokenURI at a new renderer, until it locks
+/// it; a renderer that fails falls back to the built-in one.
+contract LARPNames is ERC721, ILARPNames {
     using SafeReads for address;
+
+    struct Link {
+        address holder;
+        uint256 imdIdPlusOne;
+    }
 
     /// @inheritdoc ILARPNames
     string public constant TLD = ".imd";
     /// @inheritdoc ILARPNames
-    address public immutable IDENTITY;
+    uint256 public constant ROYALTY_BPS = 690;
+    /// @dev Gas a renderer may use for one tokenURI.
+    uint256 internal constant RENDER_GAS = 10_000_000;
 
-    mapping(bytes32 label => uint256 imdIdPlusOne) internal _holderOf;
-    mapping(uint256 imdId => bytes32 label) internal _labelOf;
+    /// @inheritdoc ILARPNames
+    address public immutable IDENTITY;
+    /// @notice LARP: who controls an identity (its owner or agent).
+    ILARP public immutable LARP;
+    /// @inheritdoc ILARPNames
+    address public immutable BURNER;
+
+    /// @inheritdoc ILARPNames
+    address public artist;
+    /// @inheritdoc ILARPNames
+    address public renderer;
+    /// @inheritdoc ILARPNames
+    bool public rendererLocked;
+
+    /// @dev name => the identity it is linked to and the owner who linked it
+    mapping(uint256 tokenId => Link) internal _links;
+    /// @dev identity => its linked name (two-way with `_links`)
+    mapping(uint256 imdId => uint256 tokenId) internal _linkedName;
+    /// @dev name => the owner who last paid for it (registered it, or paid its toll)
+    mapping(uint256 tokenId => address) internal _paidBy;
     mapping(address wallet => uint256 imdIdPlusOne) internal _primary;
     mapping(uint256 imdId => mapping(address holder => mapping(bytes32 keyHash => string))) internal _texts;
 
+    error ZeroAddress();
+
     /// @param identity identity.md
-    /// @param poolManager Uniswap v4's PoolManager
-    /// @param imd $IMD
-    /// @param pool4Hook POOL4's hook
-    /// @param imdBurn IMD's BurnExecutor
-    /// @param fallback_ where a fee goes if POOL4 can't take it (the IMD6900 NFT pot)
-    constructor(
-        address identity,
-        address poolManager,
-        address imd,
-        address pool4Hook,
-        address imdBurn,
-        address fallback_
-    ) BuysIMD(poolManager, imd, pool4Hook, imdBurn, fallback_) {
-        if (identity == address(0)) revert ZeroAddress();
+    /// @param larp the LARP registry
+    /// @param burner the LARP burner
+    /// @param artist_ who may change the renderer (until it is locked)
+    constructor(address identity, ILARP larp, address burner, address artist_) {
+        if (identity == address(0) || address(larp) == address(0) || burner == address(0)) revert ZeroAddress();
         IDENTITY = identity;
+        LARP = larp;
+        BURNER = burner;
+        artist = artist_;
     }
+
+    // ------------------------------------------------------------------ names
 
     /// @inheritdoc ILARPNames
     function priceOf(bytes32 label) public pure returns (uint256) {
@@ -51,100 +80,127 @@ contract LARPNames is ILARPNames, BuysIMD {
     }
 
     /// @inheritdoc ILARPNames
-    function register(uint256 imdId, bytes32 label, uint256 minImd) external payable nonReentrant {
-        _own(imdId);
+    function tollOf(uint256 tokenId) public view returns (uint256) {
+        address owner = _ownerOf(tokenId);
+        if (owner == address(0)) revert NoSuchName();
+        return _paidBy[tokenId] == owner ? 0 : priceOf(bytes32(tokenId));
+    }
+
+    /// @inheritdoc ILARPNames
+    function register(bytes32 label, address to, uint256 minImd) external payable returns (uint256 tokenId) {
         uint256 price = priceOf(label);
         if (msg.value != price) revert WrongPrice();
-        if (_holderOf[label] != 0) revert NameTaken();
-        bytes32 old = _labelOf[imdId];
-        if (old != 0) {
-            delete _holderOf[old];
-            emit NameReleased(imdId, old);
+        tokenId = uint256(label);
+        _mint(to, tokenId); // reverts for a taken name or address(0)
+        _paidBy[tokenId] = to;
+        emit NameRegistered(tokenId, label, to, price);
+        LARPBurner(payable(BURNER)).burn{value: price}(minImd);
+    }
+
+    /// @inheritdoc ILARPNames
+    function link(uint256 tokenId, uint256 imdId, uint256 minImd) external payable {
+        address owner = _ownerOf(tokenId);
+        if (owner == address(0)) revert NoSuchName();
+        (bool ok, address holder) = LARP.canAct(imdId, msg.sender);
+        if (!ok) revert NotYourIdentity();
+        if (owner != holder) revert NotYourName();
+        uint256 toll = _paidBy[tokenId] == holder ? 0 : priceOf(bytes32(tokenId));
+        if (msg.value != toll) revert WrongPrice();
+
+        // the identity's old name and the name's old identity come apart
+        uint256 old = _linkedName[imdId];
+        if (old != 0 && old != tokenId) {
+            delete _links[old];
+            emit NameUnlinked(old, imdId);
         }
-        _holderOf[label] = imdId + 1;
-        _labelOf[imdId] = label;
-        uint256 imd = _buyAndBurn(price, minImd);
-        emit NameRegistered(imdId, label, msg.sender, price, imd);
+        uint256 was = _links[tokenId].imdIdPlusOne;
+        if (was != 0 && was - 1 != imdId) {
+            delete _linkedName[was - 1];
+            emit NameUnlinked(tokenId, was - 1);
+        }
+        _links[tokenId] = Link(holder, imdId + 1);
+        _linkedName[imdId] = tokenId;
+        emit NameLinked(tokenId, imdId, holder, toll);
+        if (toll != 0) {
+            _paidBy[tokenId] = holder;
+            LARPBurner(payable(BURNER)).burn{value: toll}(minImd);
+        }
     }
 
     /// @inheritdoc ILARPNames
-    function release(uint256 imdId) external {
-        _own(imdId);
-        bytes32 label = _labelOf[imdId];
-        if (label == 0) revert NoName();
-        delete _holderOf[label];
-        delete _labelOf[imdId];
-        emit NameReleased(imdId, label);
-    }
-
-    /// @inheritdoc ILARPNames
-    function moveName(uint256 from, uint256 to) external {
-        _own(from);
-        _own(to);
-        bytes32 label = _labelOf[from];
-        if (label == 0) revert NoName();
-        if (_labelOf[to] != 0) revert HasName();
-        delete _labelOf[from];
-        _labelOf[to] = label;
-        _holderOf[label] = to + 1;
-        emit NameMoved(from, to, label);
+    function unlink(uint256 imdId) external {
+        uint256 tokenId = _linkedName[imdId];
+        if (tokenId == 0) return;
+        (bool ok,) = LARP.canAct(imdId, msg.sender);
+        if (!ok && _ownerOf(tokenId) != msg.sender) revert NotYours();
+        delete _linkedName[imdId];
+        delete _links[tokenId];
+        emit NameUnlinked(tokenId, imdId);
     }
 
     /// @inheritdoc ILARPNames
     function setPrimary(uint256 imdId) external {
-        _own(imdId);
+        if (IDENTITY.ownerOf(imdId, gasleft()) != msg.sender) revert NotYourIdentity();
         _primary[msg.sender] = imdId + 1;
         emit PrimarySet(msg.sender, imdId);
     }
 
     /// @inheritdoc ILARPNames
     function setText(uint256 imdId, string calldata key, string calldata value) external {
-        _own(imdId);
-        _texts[imdId][msg.sender][keccak256(bytes(key))] = value;
-        emit TextSet(imdId, msg.sender, key, value);
+        (bool ok, address holder) = LARP.canAct(imdId, msg.sender);
+        if (!ok) revert NotYourIdentity();
+        _texts[imdId][holder][keccak256(bytes(key))] = value;
+        emit TextSet(imdId, holder, key, value);
     }
 
-    /// @inheritdoc ILARPNames
-    function burn(uint256 minImd) external payable nonReentrant returns (uint256 imd) {
-        imd = _buyAndBurn(msg.value, minImd);
-    }
-
-    // --- reading ---
+    // ------------------------------------------------------------------ reading
 
     /// @inheritdoc ILARPNames
-    function labelOf(uint256 imdId) external view returns (bytes32) {
-        return _labelOf[imdId];
+    function nameOfToken(uint256 tokenId) public pure returns (string memory) {
+        return string.concat(Labels.toString(bytes32(tokenId)), TLD);
     }
 
     /// @inheritdoc ILARPNames
     function nameOf(uint256 imdId) public view returns (string memory) {
-        bytes32 label = _labelOf[imdId];
-        if (label == 0) return "";
-        return string.concat(Labels.toString(label), TLD);
+        uint256 tokenId = _linkedName[imdId];
+        if (tokenId == 0 || !_live(tokenId, imdId)) return "";
+        return nameOfToken(tokenId);
     }
 
     /// @inheritdoc ILARPNames
-    function resolve(bytes32 label) public view returns (bool exists, uint256 imdId, address holder) {
-        uint256 at = _holderOf[label];
-        if (at == 0) return (false, 0, address(0));
+    function identityOf(uint256 tokenId) public view returns (uint256 imdId, bool live) {
+        uint256 at = _links[tokenId].imdIdPlusOne;
+        if (at == 0) return (0, false);
         imdId = at - 1;
-        return (true, imdId, IDENTITY.ownerOf(imdId, gasleft()));
+        live = _live(tokenId, imdId);
     }
 
     /// @inheritdoc ILARPNames
-    function resolveName(string calldata name) external view returns (bool exists, uint256 imdId, address holder) {
-        bytes32 label = Labels.fromName(name, TLD);
-        if (label == 0) return (false, 0, address(0));
+    function resolve(bytes32 label) public view returns (bool exists, address owner, uint256 imdId, bool linked) {
+        owner = _ownerOf(uint256(label));
+        if (owner == address(0)) return (false, address(0), 0, false);
+        exists = true;
+        (imdId, linked) = identityOf(uint256(label));
+    }
+
+    /// @inheritdoc ILARPNames
+    function resolveName(string calldata full)
+        external
+        view
+        returns (bool exists, address owner, uint256 imdId, bool linked)
+    {
+        bytes32 label = Labels.fromName(full, TLD);
+        if (label == 0) return (false, address(0), 0, false);
         return resolve(label);
     }
 
     /// @inheritdoc ILARPNames
-    function primaryOf(address wallet) external view returns (uint256 imdId, string memory name, bool live) {
+    function primaryOf(address wallet) external view returns (uint256 imdId, string memory full, bool live) {
         uint256 at = _primary[wallet];
         if (at == 0) return (0, "", false);
         imdId = at - 1;
         live = IDENTITY.ownerOf(imdId, gasleft()) == wallet;
-        if (live) name = nameOf(imdId);
+        if (live) full = nameOf(imdId);
     }
 
     /// @inheritdoc ILARPNames
@@ -152,12 +208,116 @@ contract LARPNames is ILARPNames, BuysIMD {
         return _texts[imdId][IDENTITY.ownerOf(imdId, gasleft())][keccak256(bytes(key))];
     }
 
-    /// @notice ERC-165: ILARPNames and ERC-165 itself.
-    function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
-        return interfaceId == type(ILARPNames).interfaceId || interfaceId == 0x01ffc9a7;
+    /// @dev Live: the owner who linked it still owns the name and the identity.
+    function _live(uint256 tokenId, uint256 imdId) internal view returns (bool) {
+        Link storage l = _links[tokenId];
+        return
+            l.imdIdPlusOne == imdId + 1 && _ownerOf(tokenId) == l.holder
+                && IDENTITY.ownerOf(imdId, gasleft()) == l.holder;
     }
 
-    function _own(uint256 imdId) internal view {
-        if (IDENTITY.ownerOf(imdId, gasleft()) != msg.sender) revert NotYourIdentity();
+    // ------------------------------------------------------------------ ERC-721, ERC-2981
+
+    function name() public pure override returns (string memory) {
+        return "LARP Names";
+    }
+
+    function symbol() public pure override returns (string memory) {
+        return "IMDNAME";
+    }
+
+    /// @notice The name's art: the renderer's, or the built-in card when there is none or it gives nothing.
+    function tokenURI(uint256 tokenId) public view override returns (string memory uri) {
+        if (!_exists(tokenId)) revert TokenDoesNotExist();
+        string memory full = nameOfToken(tokenId);
+        (uint256 imdId, bool live) = identityOf(tokenId);
+        uint256 linked = live ? imdId + 1 : 0;
+        if (renderer != address(0)) {
+            uri = renderer.textCall(
+                abi.encodeCall(ILARPNameRenderer.render, (tokenId, full, linked)),
+                RENDER_GAS < gasleft() ? RENDER_GAS : gasleft()
+            );
+            if (bytes(uri).length != 0) return uri;
+        }
+        return _card(full, linked);
+    }
+
+    /// @notice ERC-2981: 6.9% of a sale, to the burner.
+    function royaltyInfo(uint256, uint256 salePrice) external view returns (address, uint256) {
+        return (BURNER, salePrice * ROYALTY_BPS / 10_000);
+    }
+
+    function supportsInterface(bytes4 interfaceId) public view override returns (bool) {
+        return interfaceId == 0x2a55205a || interfaceId == type(ILARPNames).interfaceId
+            || super.supportsInterface(interfaceId);
+    }
+
+    // ------------------------------------------------------------------ the art (the one changeable thing)
+
+    /// @inheritdoc ILARPNames
+    function setRenderer(address renderer_) external {
+        if (msg.sender != artist) revert NotArtist();
+        if (rendererLocked) revert Locked();
+        renderer = renderer_;
+        emit RendererSet(renderer_);
+    }
+
+    /// @inheritdoc ILARPNames
+    function setArtist(address artist_) external {
+        if (msg.sender != artist) revert NotArtist();
+        artist = artist_;
+        emit ArtistSet(artist_);
+    }
+
+    /// @inheritdoc ILARPNames
+    function lockRenderer() external {
+        if (msg.sender != artist) revert NotArtist();
+        rendererLocked = true;
+        emit RendererLocked();
+    }
+
+    /// @dev The built-in card: the name in green on black, and the identity it shows on. Labels are a-z, 0-9 and '-',
+    /// so nothing needs escaping in the SVG or the JSON.
+    function _card(string memory full, uint256 linked) internal pure returns (string memory) {
+        uint256 length = bytes(full).length;
+        uint256 size = 860 / (length + 2);
+        if (size > 96) size = 96;
+        string memory footer = linked == 0 ? "LARP name" : string.concat("identity.md #", _decimal(linked - 1));
+        string memory svg = string.concat(
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 600"><rect width="600" height="600" fill="#0b0f0c"/>',
+            '<rect x="24" y="24" width="552" height="552" rx="28" fill="none" stroke="#3ddc84" stroke-width="4"/>',
+            '<text x="300" y="300" font-family="monospace" font-size="',
+            _decimal(size),
+            '" fill="#3ddc84" text-anchor="middle" dominant-baseline="middle">',
+            full,
+            '</text><text x="300" y="536" font-family="monospace" font-size="20" fill="#6b8f71" text-anchor="middle">',
+            footer,
+            "</text></svg>"
+        );
+        string memory json = string.concat(
+            '{"name":"',
+            full,
+            '","description":"A LARP name: Linked Avatar Registry Protocol, by the IMD6900 frens.","image":"data:image/svg+xml;base64,',
+            Base64.encode(bytes(svg)),
+            '","attributes":[{"trait_type":"Length","value":',
+            _decimal(length - 4),
+            "}",
+            linked == 0 ? "" : string.concat(',{"trait_type":"Identity","value":', _decimal(linked - 1), "}"),
+            "]}"
+        );
+        return string.concat("data:application/json;base64,", Base64.encode(bytes(json)));
+    }
+
+    function _decimal(uint256 value) internal pure returns (string memory) {
+        if (value == 0) return "0";
+        uint256 digits;
+        for (uint256 v = value; v != 0; v /= 10) {
+            ++digits;
+        }
+        bytes memory out = new bytes(digits);
+        for (; value != 0; value /= 10) {
+            out[--digits] = bytes1(uint8(48 + value % 10));
+        }
+        return string(out);
     }
 }

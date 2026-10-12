@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {ILARP} from "./ILARP.sol";
 import {ILARPNames} from "./ILARPNames.sol";
+import {LARPBurner} from "./LARPBurner.sol";
 import {Labels} from "./Labels.sol";
 import {SafeReads} from "./SafeReads.sol";
 
@@ -12,7 +13,7 @@ import {SafeReads} from "./SafeReads.sol";
 /// Every IMD launch pays the swarm through a Merkle distributor; anyone can prove a wallet's allocation here, and the
 /// rank reads, live, how much of it the wallet still holds. The level is the number of swarm launches proven; the jeet
 /// points are how much of them was sold (10,000 = one launch's allocation, all gone). A crew's founding fee buys $IMD
-/// on POOL4 and burns it, through LARP names.
+/// and burns it, through the LARP burner. An identity's owner or its agent (LARP.canAct) acts for it.
 /// @dev No owner, no roles, no upgrades, no funds. Frens and crews belong to identities and pass with them on a sale;
 /// the rank belongs to whichever wallet holds the identity now.
 contract LARPLinks {
@@ -72,8 +73,10 @@ contract LARPLinks {
     address public immutable LAUNCHER;
     /// @notice The LARP registry the cards read faces from.
     ILARP public immutable LARP;
-    /// @notice LARP names: the cards' names, and the burn crew fees go through.
+    /// @notice LARP names: the cards' names.
     ILARPNames public immutable NAMES;
+    /// @notice The LARP burner crew fees go to.
+    address public immutable BURNER;
 
     // --- frens ---
     /// @notice Whether two identities are frens (symmetric).
@@ -137,15 +140,17 @@ contract LARPLinks {
     /// @param launcher IMD's launcher (Ethereum: 0xfF03410d0Fe5fa8f7F59F743de35E333D9857120)
     /// @param larp the LARP registry
     /// @param names LARP names
-    constructor(address identity, address launcher, ILARP larp, ILARPNames names) {
+    /// @param burner the LARP burner
+    constructor(address identity, address launcher, ILARP larp, ILARPNames names, address burner) {
         if (
             identity == address(0) || launcher == address(0) || address(larp) == address(0)
-                || address(names) == address(0)
+                || address(names) == address(0) || burner == address(0)
         ) revert ZeroAddress();
         IDENTITY = identity;
         LAUNCHER = launcher;
         LARP = larp;
         NAMES = names;
+        BURNER = burner;
     }
 
     // ------------------------------------------------------------------ frens
@@ -211,7 +216,7 @@ contract LARPLinks {
         _crewOf[captain] = crewId;
         emit CrewFounded(crewId, captain, name, open);
         emit CrewJoined(crewId, captain);
-        NAMES.burn{value: msg.value}(minImd);
+        LARPBurner(payable(BURNER)).burn{value: msg.value}(minImd);
     }
 
     /// @notice The captain invites identity `imdId` into crew `crewId`, or takes the invitation back.
@@ -302,7 +307,8 @@ contract LARPLinks {
     function _captain(uint256 crewId) internal view {
         Crew storage c = _crews[crewId];
         if (!c.alive) revert NoSuchCrew();
-        if (IDENTITY.ownerOf(c.captain, gasleft()) != msg.sender) revert NotCaptain();
+        (bool ok,) = LARP.canAct(c.captain, msg.sender);
+        if (!ok) revert NotCaptain();
     }
 
     // ------------------------------------------------------------ the jeet board
@@ -426,7 +432,9 @@ contract LARPLinks {
         c.frens = frenCount[imdId];
     }
 
+    /// @dev The caller is the identity's owner or its live agent.
     function _own(uint256 imdId) internal view {
-        if (IDENTITY.ownerOf(imdId, gasleft()) != msg.sender) revert NotYourIdentity();
+        (bool ok,) = LARP.canAct(imdId, msg.sender);
+        if (!ok) revert NotYourIdentity();
     }
 }

@@ -1,40 +1,34 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {Base, Pot} from "./Base.sol";
+import {Base} from "./Base.sol";
 import {LARPNames} from "../src/LARPNames.sol";
-import {ILARPNames} from "../src/ILARPNames.sol";
-import {BuysIMD} from "../src/BuysIMD.sol";
+import {ILARPNames, ILARPNameRenderer} from "../src/ILARPNames.sol";
+import {LARPBurner} from "../src/LARPBurner.sol";
 
-/// @dev A PoolManager whose swap burns all the gas it is given, as a heavy hook could.
-contract GasHogPoolManager {
-    function unlock(bytes calldata) external pure returns (bytes memory) {
-        while (true) {}
-        return "";
+contract FancyRenderer is ILARPNameRenderer {
+    function render(uint256, string calldata full, uint256 imdIdPlusOne) external pure returns (string memory) {
+        return string.concat("fancy:", full, ":", imdIdPlusOne == 0 ? "unlinked" : "linked");
     }
 }
 
-/// @dev A pot that tries to register a name again while it is being paid.
-contract GreedyPot {
-    LARPNames public names;
-
-    function aim(LARPNames names_) external {
-        names = names_;
+contract BrokenRenderer {
+    fallback() external {
+        revert("broken");
     }
+}
 
-    receive() external payable {
-        names.burn{value: msg.value}(0);
+contract HungryRenderer {
+    fallback() external {
+        while (true) {}
     }
 }
 
 contract LARPNamesTest is Base {
-    event IMDBurned(uint256 eth, uint256 imd);
-    event NameRegistered(
-        uint256 indexed imdId, bytes32 indexed label, address indexed holder, uint256 paid, uint256 imdBurned
-    );
-    event NameReleased(uint256 indexed imdId, bytes32 indexed label);
+    event NameLinked(uint256 indexed tokenId, uint256 indexed imdId, address indexed holder, uint256 toll);
+    event NameUnlinked(uint256 indexed tokenId, uint256 indexed imdId);
 
-    bytes32 kek;
+    uint256 kek; // kekmaster.imd
 
     function setUp() public {
         _deploy();
@@ -42,53 +36,52 @@ contract LARPNamesTest is Base {
         identity.mint(alice, 0);
         identity.mint(alice, 1);
         identity.mint(bob, 2);
-        vm.deal(alice, 10 ether);
-        vm.deal(bob, 10 ether);
-        kek = _label("kekmaster");
-    }
-
-    function _register(address who, uint256 imdId, bytes32 label) internal {
-        uint256 price = names.priceOf(label);
-        vm.prank(who);
-        names.register{value: price}(imdId, label, 0);
+        kek = _register(alice, "kekmaster");
     }
 
     // --- registering ---
 
-    function test_RegisterBurnsIMDThroughPool4() public {
-        uint256 before = imd.balanceOf(burnExecutor);
-        vm.expectEmit(true, true, true, false, address(names));
-        emit NameRegistered(0, kek, alice, 0.0069 ether, 0);
-        vm.prank(alice);
-        names.register{value: 0.0069 ether}(0, kek, 0);
-
-        uint256 burned = imd.balanceOf(burnExecutor) - before;
-        // 0.0069 ETH at ~2,000 IMD per ETH, less POOL4's 1%
-        assertApproxEqRel(burned, 13.66 ether, 0.02e18, "the fee bought $IMD for IMD's burn");
-        assertEq(address(names).balance, 0, "no ETH stays");
-        assertEq(address(pot).balance, 0, "POOL4 took it");
-
-        assertEq(names.nameOf(0), "kekmaster.imd");
-        assertEq(names.labelOf(0), kek);
-        (bool exists, uint256 imdId, address holder) = names.resolve(kek);
-        assertTrue(exists);
-        assertEq(imdId, 0);
-        assertEq(holder, alice);
+    function test_RegisteringMintsTheNameAndBurnsTheFee() public {
+        uint256 before = imd.balanceOf(DEAD);
+        uint256 id = _register(carol, "frenly");
+        assertEq(id, uint256(_label("frenly")), "the token id is the label");
+        assertEq(names.ownerOf(id), carol);
+        assertEq(names.balanceOf(carol), 1);
+        assertGt(imd.balanceOf(DEAD), before, "the fee bought $IMD for 0x..dEaD");
+        assertEq(address(names).balance, 0);
+        assertEq(address(burner).balance, 0);
+        assertEq(names.nameOfToken(id), "frenly.imd");
     }
 
-    function test_ResolveName() public {
-        _register(alice, 1, kek);
-        (bool exists, uint256 imdId,) = names.resolveName("kekmaster.imd");
+    function test_AnyoneRegistersAnyFreeName() public {
+        address stranger = makeAddr("stranger"); // no identity
+        _register(stranger, "outsider");
+        (bool exists, address owner,, bool linked) = names.resolveName("outsider.imd");
         assertTrue(exists);
-        assertEq(imdId, 1);
-        (exists, imdId,) = names.resolveName("kekmaster");
-        assertTrue(exists);
-        assertEq(imdId, 1);
-        string[6] memory misses = ["KEKMASTER.imd", "kekmaster.eth", ".imd", "", "nobody.imd", "kek master"];
-        for (uint256 i; i < misses.length; ++i) {
-            (exists,,) = names.resolveName(misses[i]);
-            assertFalse(exists, misses[i]);
-        }
+        assertEq(owner, stranger);
+        assertFalse(linked);
+    }
+
+    function test_RegisterForSomeoneElse() public {
+        vm.deal(alice, 1 ether);
+        vm.prank(alice);
+        uint256 id = names.register{value: 0.0069 ether}(_label("a-gift"), bob, 0);
+        assertEq(names.ownerOf(id), bob);
+        assertEq(names.tollOf(id), 0, "the receiver of a registration owes no toll");
+    }
+
+    function test_RegistrationRules() public {
+        vm.deal(bob, 1 ether);
+        vm.startPrank(bob);
+        vm.expectRevert(); // solady TokenAlreadyExists
+        names.register{value: 0.0069 ether}(_label("kekmaster"), bob, 0);
+        vm.expectRevert(ILARPNames.WrongPrice.selector);
+        names.register{value: 0.007 ether}(_label("kekmasters"), bob, 0);
+        vm.expectRevert(ILARPNames.BadName.selector);
+        names.register{value: 0.0069 ether}(_label("Kek"), bob, 0);
+        vm.expectRevert(); // solady TransferToZeroAddress
+        names.register{value: 0.0069 ether}(_label("nobody-here"), address(0), 0);
+        vm.stopPrank();
     }
 
     function test_Prices() public view {
@@ -107,192 +100,201 @@ contract LARPNamesTest is Base {
             _label("kek-"),
             _label("ke k"),
             _label("ke.k"),
-            bytes32(uint256(_label("kek")) | 1) // a byte after the padding
+            bytes32(uint256(_label("kek")) | 1)
         ];
         for (uint256 i; i < bad.length; ++i) {
             vm.expectRevert(ILARPNames.BadName.selector);
             names.priceOf(bad[i]);
         }
-        assertEq(names.priceOf(_label("k-e-k")), 0.0069 ether, "hyphens inside are fine");
     }
 
-    function test_ExactPriceOnly() public {
-        vm.startPrank(alice);
-        vm.expectRevert(ILARPNames.WrongPrice.selector);
-        names.register{value: 0.0068 ether}(0, kek, 0);
-        vm.expectRevert(ILARPNames.WrongPrice.selector);
-        names.register{value: 0.007 ether}(0, kek, 0);
-        vm.stopPrank();
+    function test_AFeeParksWhenNoPoolCanTakeIt() public {
+        _deploy(); // fresh, with both pools empty
+        _register(carol, "patient");
+        assertEq(names.ownerOf(uint256(_label("patient"))), carol, "registered all the same");
+        assertEq(address(burner).balance, 0.0069 ether, "the fee waits in the burner for the next burn");
     }
 
-    function test_OnlyTheIdentitysOwnerRegisters() public {
-        vm.prank(bob);
-        vm.expectRevert(ILARPNames.NotYourIdentity.selector);
-        names.register{value: 0.0069 ether}(0, kek, 0);
-    }
+    // --- linking ---
 
-    function test_OneHolderPerName() public {
-        _register(alice, 0, kek);
-        vm.prank(bob);
-        vm.expectRevert(ILARPNames.NameTaken.selector);
-        names.register{value: 0.0069 ether}(2, kek, 0);
-    }
-
-    function test_ANewNameReleasesTheOld() public {
-        _register(alice, 0, kek);
-        bytes32 other = _label("otherone");
+    function test_LinkTheNameToAnIdentity() public {
         vm.expectEmit(address(names));
-        emit NameReleased(0, kek);
-        _register(alice, 0, other);
-        (bool exists,,) = names.resolve(kek);
-        assertFalse(exists);
-        assertEq(names.nameOf(0), "otherone.imd");
-        _register(bob, 2, kek);
-        assertEq(names.nameOf(2), "kekmaster.imd");
-    }
-
-    function test_TheNamePassesWithTheIdentity() public {
-        _register(alice, 0, kek);
+        emit NameLinked(kek, 0, alice, 0);
         vm.prank(alice);
-        identity.transferFrom(alice, bob, 0);
-        (bool exists, uint256 imdId, address holder) = names.resolve(kek);
-        assertTrue(exists);
+        names.link(kek, 0, 0);
+        assertEq(names.nameOf(0), "kekmaster.imd");
+        (uint256 imdId, bool live) = names.identityOf(kek);
         assertEq(imdId, 0);
-        assertEq(holder, bob, "resolves to whoever holds the identity");
+        assertTrue(live);
+        (bool exists, address owner, uint256 id, bool linked) = names.resolve(_label("kekmaster"));
+        assertTrue(exists);
+        assertEq(owner, alice);
+        assertEq(id, 0);
+        assertTrue(linked);
     }
 
-    function test_Release() public {
-        _register(alice, 0, kek);
-        vm.prank(alice);
-        names.release(0);
-        assertEq(names.nameOf(0), "");
-        _register(bob, 2, kek);
-        vm.prank(alice);
-        vm.expectRevert(ILARPNames.NoName.selector);
-        names.release(0);
+    function test_LinkRules() public {
+        vm.deal(alice, 1 ether);
+        vm.startPrank(alice);
+        vm.expectRevert(ILARPNames.NotYourIdentity.selector);
+        names.link(kek, 2, 0); // bob's identity
+        vm.expectRevert(ILARPNames.NoSuchName.selector);
+        names.link(uint256(_label("nothing")), 0, 0);
+        vm.expectRevert(ILARPNames.WrongPrice.selector);
+        names.link{value: 1}(kek, 0, 0); // no toll due
+        vm.stopPrank();
+        vm.prank(bob);
+        vm.expectRevert(ILARPNames.NotYourName.selector);
+        names.link(kek, 2, 0); // alice's name
     }
 
-    function test_MoveName() public {
-        _register(alice, 0, kek);
-        vm.prank(alice);
-        names.moveName(0, 1);
+    function test_OneNamePerIdentityOneIdentityPerName() public {
+        uint256 other = _register(alice, "second-name");
+        vm.startPrank(alice);
+        names.link(kek, 0, 0);
+        // moving the name to another identity frees the first
+        vm.expectEmit(address(names));
+        emit NameUnlinked(kek, 0);
+        names.link(kek, 1, 0);
         assertEq(names.nameOf(0), "");
         assertEq(names.nameOf(1), "kekmaster.imd");
-        (, uint256 imdId,) = names.resolve(kek);
-        assertEq(imdId, 1);
-
-        vm.startPrank(alice);
-        vm.expectRevert(ILARPNames.NoName.selector);
-        names.moveName(0, 1);
-        vm.stopPrank();
-        _register(alice, 0, _label("second"));
-        vm.prank(alice);
-        vm.expectRevert(ILARPNames.HasName.selector);
-        names.moveName(0, 1);
-        vm.prank(alice);
-        vm.expectRevert(ILARPNames.NotYourIdentity.selector);
-        names.moveName(1, 2);
-    }
-
-    // --- POOL4 ---
-
-    function test_MinImdProtectsTheBuy() public {
-        vm.prank(alice);
-        vm.expectRevert(BuysIMD.TooLittleIMD.selector);
-        names.register{value: 0.0069 ether}(0, kek, 20 ether);
-        assertEq(names.nameOf(0), "", "nothing registered");
-    }
-
-    function test_AnEmptyPool4SendsTheFeeToThePot() public {
-        // a fresh deployment whose POOL4 has no liquidity
-        _deploy();
-        identity.mint(alice, 0);
+        // a second name on the same identity replaces the first
         vm.expectEmit(address(names));
-        emit IMDBurned(0.0069 ether, 0);
+        emit NameUnlinked(kek, 1);
+        names.link(other, 1, 0);
+        vm.stopPrank();
+        assertEq(names.nameOf(1), "second-name.imd");
+        (, bool live) = names.identityOf(kek);
+        assertFalse(live);
+    }
+
+    function test_SellingTheNameTakesItDown() public {
         vm.prank(alice);
-        names.register{value: 0.0069 ether}(0, kek, 0);
-        assertEq(address(pot).balance, 0.0069 ether, "the IMD6900 pot got it");
-        assertEq(names.nameOf(0), "kekmaster.imd", "the name is registered all the same");
-    }
-
-    /// @dev Audit fix: with any gas limit, the fee is burned through POOL4 or the call reverts. A caller can't make the
-    /// swap run out of gas inside the try and push its fee to the pot.
-    function test_TooLittleGasNeverReachesThePot() public {
-        uint256 burnedTo;
-        for (uint256 gas = 60_000; gas < 400_000; gas += 5_000) {
-            vm.prank(alice);
-            (bool ok,) = address(names).call{value: 0.0069 ether, gas: gas}(
-                abi.encodeCall(names.register, (0, _label("gaslimited"), 0))
-            );
-            assertEq(address(pot).balance, 0, "the pot never gets a fee POOL4 could take");
-            if (ok) {
-                ++burnedTo;
-                vm.prank(alice);
-                names.release(0);
-            }
-        }
-        assertGt(burnedTo, 0, "with enough gas it goes through");
-    }
-
-    /// @dev Audit fix, the case it guards: a swap that runs out of gas reverts the call; its fee is not pushed to the
-    /// pot with the 1/64 of gas the try keeps back.
-    function test_ASwapOutOfGasRevertsInsteadOfPayingThePot() public {
-        LARPNames hogged = new LARPNames(
-            address(identity), address(new GasHogPoolManager()), address(imd), address(0), burnExecutor, address(pot)
-        );
+        names.link(kek, 0, 0);
         vm.prank(alice);
-        (bool ok, bytes memory err) =
-            address(hogged).call{value: 0.0069 ether, gas: 3_000_000}(abi.encodeCall(hogged.register, (0, kek, 0)));
-        assertFalse(ok);
-        assertEq(bytes4(err), BuysIMD.TooLittleGas.selector);
-        assertEq(address(pot).balance, 0);
+        names.transferFrom(alice, bob, kek);
+        assertEq(names.nameOf(0), "", "alice's identity no longer shows it");
+        (, address owner,, bool linked) = names.resolve(_label("kekmaster"));
+        assertEq(owner, bob);
+        assertFalse(linked);
     }
 
-    function test_AnyoneCanBurn() public {
-        uint256 before = imd.balanceOf(burnExecutor);
-        vm.prank(carol);
-        vm.deal(carol, 1 ether);
-        uint256 got = names.burn{value: 1 ether}(0);
-        assertGt(got, 0);
-        assertEq(imd.balanceOf(burnExecutor) - before, got);
-    }
-
-    function test_OnlyThePoolManagerCallsBack() public {
-        vm.expectRevert(BuysIMD.NotPoolManager.selector);
-        names.unlockCallback(abi.encode(uint256(1 ether)));
-    }
-
-    function test_NoReentryThroughThePot() public {
-        GreedyPot greedy = new GreedyPot();
-        LARPNames n2 =
-            new LARPNames(address(identity), address(pm), address(imd), address(0x1234), burnExecutor, address(greedy));
-        greedy.aim(n2);
-        // POOL4 with hook 0x1234 doesn't exist, so the fee goes to the pot, which tries to come back in
+    function test_SellingTheIdentityTakesItDown() public {
         vm.prank(alice);
-        vm.expectRevert(BuysIMD.FallbackRefused.selector);
-        n2.register{value: 0.0069 ether}(0, kek, 0);
+        names.link(kek, 0, 0);
+        vm.prank(alice);
+        identity.transferFrom(alice, bob, 0);
+        assertEq(names.nameOf(0), "");
+    }
+
+    // --- the toll: every new owner burns once ---
+
+    function test_ANewOwnerPaysTheTollToLink() public {
+        vm.prank(alice);
+        names.transferFrom(alice, bob, kek); // a secondary sale, on any market
+        assertEq(names.tollOf(kek), 0.0069 ether);
+
+        vm.deal(bob, 1 ether);
+        vm.prank(bob);
+        vm.expectRevert(ILARPNames.WrongPrice.selector);
+        names.link(kek, 2, 0);
+
+        uint256 before = imd.balanceOf(DEAD);
+        vm.expectEmit(address(names));
+        emit NameLinked(kek, 2, bob, 0.0069 ether);
+        vm.prank(bob);
+        names.link{value: 0.0069 ether}(kek, 2, 0);
+        assertGt(imd.balanceOf(DEAD), before, "the toll was burned");
+        assertEq(names.nameOf(2), "kekmaster.imd");
+        assertEq(names.tollOf(kek), 0, "paid once");
+
+        // relinking later is free
+        vm.prank(bob);
+        names.unlink(2);
+        vm.prank(bob);
+        names.link(kek, 2, 0);
+    }
+
+    function test_TheTollFollowsEveryChangeOfHands() public {
+        vm.prank(alice);
+        names.transferFrom(alice, bob, kek);
+        vm.prank(bob);
+        names.transferFrom(bob, alice, kek);
+        assertEq(names.tollOf(kek), 0, "back to the owner who paid for it");
+        vm.prank(alice);
+        names.transferFrom(alice, carol, kek);
+        assertEq(names.tollOf(kek), 0.0069 ether);
+    }
+
+    function test_ShortNamesHaveShortNameTolls() public {
+        uint256 id = _register(alice, "gm");
+        vm.prank(alice);
+        names.transferFrom(alice, bob, id);
+        assertEq(names.tollOf(id), 0.069 ether);
+    }
+
+    // --- unlinking ---
+
+    function test_Unlink() public {
+        vm.prank(alice);
+        names.link(kek, 0, 0);
+        vm.prank(bob);
+        vm.expectRevert(ILARPNames.NotYours.selector);
+        names.unlink(0);
+        vm.prank(alice);
+        names.unlink(0);
+        assertEq(names.nameOf(0), "");
+    }
+
+    function test_TheNamesNewOwnerUnlinksAStaleLink() public {
+        vm.prank(alice);
+        names.link(kek, 0, 0);
+        vm.prank(alice);
+        names.transferFrom(alice, bob, kek);
+        vm.prank(bob); // owns the name, not identity 0
+        names.unlink(0);
+        (uint256 imdId,) = names.identityOf(kek);
+        assertEq(imdId, 0);
+        (, bool live) = names.identityOf(kek);
+        assertFalse(live);
+    }
+
+    // --- secondary royalties ---
+
+    function test_RoyaltiesGoToTheBurner() public view {
+        (address receiver, uint256 amount) = names.royaltyInfo(kek, 1 ether);
+        assertEq(receiver, address(burner));
+        assertEq(amount, 0.069 ether, "6.9%");
+        assertTrue(names.supportsInterface(0x2a55205a), "ERC-2981");
+        assertTrue(names.supportsInterface(0x80ac58cd), "ERC-721");
+        assertTrue(names.supportsInterface(0x5b5e139f), "metadata");
+        assertTrue(names.supportsInterface(type(ILARPNames).interfaceId));
+    }
+
+    function test_ARoyaltyPaymentIsBurned() public {
+        // a market pays the royalty to the burner; anyone burns it
+        (bool ok,) = address(burner).call{value: 0.069 ether}("");
+        assertTrue(ok);
+        uint256 before = imd.balanceOf(DEAD);
+        burner.burn(0);
+        assertGt(imd.balanceOf(DEAD), before);
     }
 
     // --- reverse records and text ---
 
     function test_Primary() public {
-        _register(alice, 1, kek);
+        vm.prank(alice);
+        names.link(kek, 1, 0);
         vm.prank(alice);
         names.setPrimary(1);
-        (uint256 imdId, string memory name, bool live) = names.primaryOf(alice);
+        (uint256 imdId, string memory full, bool live) = names.primaryOf(alice);
         assertEq(imdId, 1);
-        assertEq(name, "kekmaster.imd");
+        assertEq(full, "kekmaster.imd");
         assertTrue(live);
-
         vm.prank(alice);
         identity.transferFrom(alice, bob, 1);
-        (, name, live) = names.primaryOf(alice);
-        assertFalse(live, "she no longer holds it");
-        assertEq(name, "");
-
-        vm.prank(alice);
-        vm.expectRevert(ILARPNames.NotYourIdentity.selector);
-        names.setPrimary(2);
+        (,, live) = names.primaryOf(alice);
+        assertFalse(live);
     }
 
     function test_TextRecordsStartOverWithANewHolder() public {
@@ -301,29 +303,121 @@ contract LARPNamesTest is Base {
         assertEq(names.text(0, "x"), "@kekmaster");
         vm.prank(alice);
         identity.transferFrom(alice, bob, 0);
-        assertEq(names.text(0, "x"), "", "bob starts over");
+        assertEq(names.text(0, "x"), "");
         vm.prank(bob);
         names.setText(0, "x", "@bob");
         assertEq(names.text(0, "x"), "@bob");
-        vm.prank(bob);
-        identity.transferFrom(bob, alice, 0);
-        assertEq(names.text(0, "x"), "@kekmaster", "alice's record is hers");
     }
 
-    function test_SupportsInterface() public view {
-        assertTrue(names.supportsInterface(type(ILARPNames).interfaceId));
-        assertTrue(names.supportsInterface(0x01ffc9a7));
-        assertFalse(names.supportsInterface(0xffffffff));
+    // --- the art: the one thing that can change ---
+
+    function test_TheBuiltInCard() public {
+        vm.prank(alice);
+        names.link(kek, 0, 0);
+        string memory uri = names.tokenURI(kek);
+        assertEq(_prefix(uri, 29), "data:application/json;base64,");
+        assertTrue(_contains(_decoded(uri), '"name":"kekmaster.imd"'));
+        assertTrue(_contains(_decoded(uri), '"trait_type":"Identity","value":0'));
+        vm.expectRevert(); // TokenDoesNotExist
+        names.tokenURI(uint256(_label("nothing")));
     }
 
-    function testFuzz_OneNamePerIdentityOneIdentityPerName(uint8 a, uint8 b) public {
-        bytes32[3] memory labels = [_label("alpha"), _label("bravo"), _label("charlie")];
-        _register(alice, 0, labels[a % 3]);
-        uint256 price = names.priceOf(labels[b % 3]);
+    function test_TheArtistChangesTheArtAndOnlyTheArt() public {
+        FancyRenderer fancy = new FancyRenderer();
         vm.prank(bob);
-        if (a % 3 == b % 3) vm.expectRevert(ILARPNames.NameTaken.selector);
-        names.register{value: price}(2, labels[b % 3], 0);
-        (, uint256 holderOfA,) = names.resolve(labels[a % 3]);
-        assertEq(holderOfA, 0);
+        vm.expectRevert(ILARPNames.NotArtist.selector);
+        names.setRenderer(address(fancy));
+
+        vm.prank(artist);
+        names.setRenderer(address(fancy));
+        assertEq(names.tokenURI(kek), "fancy:kekmaster.imd:unlinked");
+
+        vm.prank(artist);
+        names.setArtist(bob);
+        vm.prank(artist);
+        vm.expectRevert(ILARPNames.NotArtist.selector);
+        names.setRenderer(address(0));
+
+        vm.prank(bob);
+        names.lockRenderer();
+        vm.prank(bob);
+        vm.expectRevert(ILARPNames.Locked.selector);
+        names.setRenderer(address(0));
+        assertTrue(names.rendererLocked());
+    }
+
+    function test_ABrokenRendererFallsBackToTheCard() public {
+        string memory card = names.tokenURI(kek);
+        vm.startPrank(artist);
+        names.setRenderer(address(new BrokenRenderer()));
+        assertEq(names.tokenURI(kek), card);
+        names.setRenderer(address(new HungryRenderer()));
+        assertEq(names.tokenURI(kek), card, "a renderer that eats its gas falls back too");
+        names.setRenderer(makeAddr("no code"));
+        assertEq(names.tokenURI(kek), card);
+        vm.stopPrank();
+    }
+
+    // --- helpers ---
+
+    function _prefix(string memory s, uint256 n) internal pure returns (string memory out) {
+        bytes memory b = bytes(s);
+        bytes memory o = new bytes(n);
+        for (uint256 i; i < n; ++i) {
+            o[i] = b[i];
+        }
+        out = string(o);
+    }
+
+    function _b64(string memory uri) internal pure returns (bytes memory) {
+        bytes memory b = bytes(uri);
+        bytes memory o = new bytes(b.length - 29);
+        for (uint256 i; i < o.length; ++i) {
+            o[i] = b[i + 29];
+        }
+        return o;
+    }
+
+    function _decoded(string memory uri) internal pure returns (string memory) {
+        return string(_base64Decode(_b64(uri)));
+    }
+
+    function _contains(string memory hay, string memory needle) internal pure returns (bool) {
+        bytes memory h = bytes(hay);
+        bytes memory n = bytes(needle);
+        if (n.length > h.length) return false;
+        for (uint256 i; i <= h.length - n.length; ++i) {
+            bool m = true;
+            for (uint256 j; j < n.length; ++j) {
+                if (h[i + j] != n[j]) {
+                    m = false;
+                    break;
+                }
+            }
+            if (m) return true;
+        }
+        return false;
+    }
+
+    function _base64Decode(bytes memory data) internal pure returns (bytes memory) {
+        bytes memory table = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        uint8[128] memory rev;
+        for (uint8 i; i < 64; ++i) {
+            rev[uint8(table[i])] = i;
+        }
+        uint256 pad;
+        if (data.length > 0 && data[data.length - 1] == "=") ++pad;
+        if (data.length > 1 && data[data.length - 2] == "=") ++pad;
+        bytes memory out = new bytes(data.length / 4 * 3 - pad);
+        uint256 k;
+        for (uint256 i; i < data.length; i += 4) {
+            uint256 n = (uint256(rev[uint8(data[i])]) << 18) | (uint256(rev[uint8(data[i + 1])]) << 12)
+                | (uint256(data[i + 2] == "=" ? 0 : rev[uint8(data[i + 2])]) << 6)
+                | uint256(data[i + 3] == "=" ? 0 : rev[uint8(data[i + 3])]);
+            for (uint256 j; j < 3 && k < out.length; ++j) {
+                out[k++] = bytes1(uint8(n >> (16 - 8 * j)));
+            }
+        }
+        return out;
     }
 }

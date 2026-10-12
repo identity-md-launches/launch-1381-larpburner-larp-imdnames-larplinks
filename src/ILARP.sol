@@ -29,6 +29,8 @@ interface ILARP {
     );
     /// @notice The item `holder` placed in identity `imdId`'s slot `slot` came off.
     event ItemUnequipped(uint256 indexed imdId, uint256 slot, address indexed holder);
+    /// @notice `holder` made `agent` identity `imdId`'s agent (address(0): no agent).
+    event AgentSet(uint256 indexed imdId, address indexed holder, address indexed agent);
 
     /// @notice The caller does not own the identity.
     error NotYourIdentity();
@@ -40,6 +42,39 @@ interface ILARP {
     error BadSlot();
     /// @notice Only the identity's owner or the wallet that placed the NFT can take it off.
     error NotYourPlacement();
+    /// @notice No such identity.
+    error NoSuchIdentity();
+    /// @notice The signature's deadline has passed.
+    error Expired();
+    /// @notice The signature isn't the identity owner's (or was already used).
+    error BadSignature();
+    /// @notice Only the identity's agent can resign.
+    error NotTheAgent();
+
+    // --- agents ---
+    // An identity's owner can name one agent: a key its agent (an IMD worker, a bot, a hot wallet) holds, that acts
+    // for the identity everywhere in LARP: faces and items (with the owner's NFTs), names' links and text records,
+    // frens and crews. An agent can't move any token or ETH of the owner's. It is the owner's, so it lapses the moment
+    // the identity changes hands; the owner can replace or remove it any time, and the agent can resign.
+
+    /// @notice Identity `imdId`'s owner makes `agent` its agent (address(0) removes it). Voids the owner's unused
+    /// agent signatures.
+    function setAgent(uint256 imdId, address agent) external;
+    /// @notice Sets identity `imdId`'s agent with its owner's EIP-712 signature (an EOA's, or an ERC-1271 contract
+    /// wallet's) of SetAgent(imdId, agent, holder, nonce, deadline): the owner signs, anyone (the agent) sends.
+    function setAgentBySig(uint256 imdId, address agent, uint256 deadline, bytes calldata signature) external;
+    /// @notice The agent of identity `imdId` steps down.
+    function resignAgent(uint256 imdId) external;
+    /// @notice Identity `imdId`'s agent, live while the owner who named it still holds the identity.
+    function agentOf(uint256 imdId) external view returns (address agent, bool live);
+    /// @notice The identity `agent` was last made the agent of; `live` while it still is.
+    function identityOfAgent(address agent) external view returns (uint256 imdId, bool live);
+    /// @notice Whether `who` controls identity `imdId` (its owner, or its live agent), and its owner.
+    function canAct(uint256 imdId, address who) external view returns (bool ok, address holder);
+    /// @notice The next agent-signature nonce of `holder`.
+    function nonces(address holder) external view returns (uint256);
+    /// @notice EIP-712 domain separator (name "LARP", version "1").
+    function DOMAIN_SEPARATOR() external view returns (bytes32);
 
     /// @notice The identity.md collection whose tokens larp.
     function IDENTITY() external view returns (address);
@@ -47,15 +82,17 @@ interface ILARP {
     function SLOTS() external view returns (uint256);
 
     /// @notice Puts the ERC-721 `collection` #`tokenId` on identity `imdId` as its face, in place of any face it had.
-    /// The caller must own both. The token comes off wherever else it was placed.
+    /// The caller must control the identity (its owner or agent), and the owner must own the token. The token comes off
+    /// wherever else it was placed.
     function setFace(uint256 imdId, address collection, uint256 tokenId) external;
-    /// @notice Takes identity `imdId`'s face off. The identity's owner or the face's placer can; nothing happens if
-    /// there is none.
+    /// @notice Takes identity `imdId`'s face off. The identity's owner or agent, or the face's placer, can; nothing
+    /// happens if there is none.
     function clearFace(uint256 imdId) external;
     /// @notice Equips `collection` #`tokenId` in identity `imdId`'s item slot `slot`, in place of what was there. The
-    /// caller must own the identity and the token (ERC-721), or a copy not already placed (ERC-1155).
+    /// caller must control the identity; its owner must own the token (ERC-721) or a copy not already placed (ERC-1155).
     function equip(uint256 imdId, uint256 slot, address collection, uint256 tokenId, Kind kind) external;
-    /// @notice Takes the item in identity `imdId`'s slot `slot` off. The identity's owner or the item's placer can.
+    /// @notice Takes the item in identity `imdId`'s slot `slot` off. The identity's owner or agent, or the item's
+    /// placer, can.
     function unequip(uint256 imdId, uint256 slot) external;
 
     /// @notice Identity `imdId`'s face on record. Show it only when `live`.

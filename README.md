@@ -3,45 +3,59 @@
 The protocol that interconnects the IMD ecosystem. Every identity.md (`0x0000eC93…ec1D`, 2,000 identities, each an IMD
 agent) gets:
 - **a face and items:** any NFT its holder owns;
-- **a name:** `name.imd`;
+- **an agent key** that runs the identity without the owner's wallet;
+- **a name:** `name.imd`, an NFT you can trade;
 - **frens and a crew;**
 - **a rank,** read from what its holder did with the swarm's airdrops.
 
-Apps read three contracts to draw an identity, find it by name, and see who it runs with. Every name and crew fee buys
-$IMD on **POOL4** (IMD's ETH/$IMD Uniswap v4 pool) and burns it: volume on POOL4, $IMD destroyed.
+**Every fee buys $IMD and burns it**: names, crews, the toll on every name changing hands, and royalties. It's bought
+on POOL4 first (volume there), and the $IMD goes to `0x…dEaD`, where nobody can ever move it.
 
-Three contracts, deployed on Ethereum by the IMD swarm. No owner, no admin, no upgrades, no funds held.
+Four contracts on Ethereum, deployed by the IMD swarm.
+- No owner, no admin, no upgrades.
+- The one role, the names' artist, can change only the names' art, and can lock it forever.
 
 | contract | what |
 |---|---|
-| `LARP` (`ILARP`) | the avatar standard: one ERC-721 as the face, eight item slots (ERC-721 or ERC-1155) |
-| `LARPNames` (`ILARPNames`) | `name.imd`: ENS-style names, reverse records, text records; fees buy and burn $IMD on POOL4 |
+| `LARPBurner` | where every fee goes; it leaves only as $IMD bought and sent to `0x…dEaD` |
+| `LARP` (`ILARP`) | the avatar standard (a face, eight item slots) and agents |
+| `LARPNames` (`ILARPNames`) | `name.imd` as ERC-721 NFTs: registration, links to identities, reverse and text records, royalties |
 | `LARPLinks` | frens, crews, the jeet rank, and `cardOf`: everything about an identity in one read |
 
-## LARP: faces and items
+## Agents: connect your IMD agent without exposing your wallet
 
-- `setFace(imdId, collection, tokenId)`: the caller must own the identity and the ERC-721.
-- `equip(imdId, slot, collection, tokenId, kind)`: slots 1 to 8, `kind` ERC721 or ERC1155. For an ERC-1155, the
-  caller needs a copy not already placed.
-- `clearFace` / `unequip`: by the identity's owner, or by whoever placed it (who can always take its own NFT back).
+The identity's owner names one agent, a key the agent itself holds (an IMD worker, a bot, a hot wallet):
+- `setAgent(imdId, agent)`: one call from the owner, or
+- `setAgentBySig(imdId, agent, deadline, signature)`: the owner **only signs** an EIP-712 message (any wallet,
+  hardware wallets and ERC-1271 contract wallets included), and the agent sends it. The owner's wallet never sends a
+  transaction, and the signature can't be replayed (per-holder nonce, deadline, bound to this contract and chain).
+
+**What the agent can do:** it acts for the identity everywhere in LARP. It can put on the owner's NFTs, link the
+owner's names, set text records, fren, and run crews.
+
+**Limits:**
+- It can't move any token or ETH.
+- It lapses the moment the identity changes hands.
+- The owner can replace or remove it at any time (`setAgent(imdId, address(0))`), and the agent can `resignAgent`.
+
+**Reads:** `canAct(imdId, who)` tells any app whether a key speaks for an identity. `identityOfAgent(agent)` is the
+reverse lookup.
+
+## Faces and items (LARP)
+
+- `setFace(imdId, collection, tokenId)` puts an ERC-721 on as the face.
+- `equip(imdId, slot, collection, tokenId, kind)` uses slots 1 to 8; `kind` is ERC721 or ERC1155.
 
 **The rules:**
-- A placement is **live while the wallet that made it holds the identity and the NFT.** A sale of either takes it down
-  with nobody acting, and a new owner chooses again.
-- **An ERC-721 shows on one identity at a time:** placing it anywhere takes it off wherever it was.
-- **A wallet's ERC-1155 copies show on as many slots as it holds copies.** If it sells copies, its placements of that
-  item go dark until it takes enough off.
-- identity.md tokens are never worn.
+- A placement shows while the owner holds both the identity and the NFT.
+- An ERC-721 shows on one identity at a time.
+- A wallet's ERC-1155 copies cover as many slots as it holds copies.
 
-**Reads:**
-- `faceOf`, `itemOf`, `wearerOf(collection, tokenId)` (the reverse: which identity and slot).
-- `faceURI` (the face's metadata, or the identity's own).
-- `itemURI`.
-- `avatarOf`: ENSIP-12, `eip155:1/erc721:<collection>/<id>`. Any ENS-avatar library resolves it.
+**Reads:** `faceOf`, `itemOf`, `wearerOf`, `faceURI`, `itemURI`, and `avatarOf` (ENSIP-12).
 
-## LARP names: name.imd
+## Names (LARPNames): kek.imd, an NFT
 
-- `register(imdId, label, minImd)`, paying exactly `priceOf(label)`:
+- **`register(label, to, minImd)`:** anyone can register any free name and gets an ERC-721.
 
   | label length | price |
   |---|---|
@@ -49,75 +63,72 @@ Three contracts, deployed on Ethereum by the IMD swarm. No owner, no admin, no u
   | 4 | 0.0169 ETH |
   | 5+ | 0.0069 ETH |
 
-  The fee buys at least `minImd` $IMD on POOL4, which goes to IMD's BurnExecutor (`0xe293…c750`).
-- **One name per identity, unique.** A label is 1 to 32 of a-z, 0-9 and `-`, not at either end.
-- **The name belongs to the identity** and passes with it on a sale. `release` frees it; `moveName(from, to)` moves it
-  between the caller's identities.
-- `resolve(label)` / `resolveName("kek.imd")` return the identity and the wallet holding it now. `nameOf(imdId)` returns
-  `"kek.imd"`.
-- **Reverse record:** `setPrimary(imdId)` picks a wallet's identity; `primaryOf(wallet)` is live while the wallet
-  holds it.
-- **Text records:** `setText(imdId, key, value)` for `x`, `url`, `agent`, … They belong to the holder who set them, so
-  a new holder starts with none.
-- `burn(minImd)`: anyone can send ETH to buy and burn $IMD on POOL4.
+  Paid once, kept forever, burned in full. A label is 1 to 32 of a-z, 0-9 and `-`, not at either end.
+- **`link(tokenId, imdId, minImd)`:** shows the name on an identity its owner holds, while the owner holds both. One
+  name per identity, one identity per name.
+- **Secondary sales burn twice:**
+  - **ERC-2981 royalty, 6.9%:** paid to the burner by markets that honour royalties.
+  - **The toll,** which no market can skip: a new owner pays the name's price once to link it, burned.
+  - `tollOf(tokenId)` shows what is due.
+- **Resolving:** `resolve(label)` / `resolveName("kek.imd")` return the owner and the identity the name shows on.
+  `nameOf(imdId)` returns `"kek.imd"`.
+- **Reverse record:** `setPrimary(imdId)` for a wallet.
+- **Text records:** `setText(imdId, key, value)` for `x`, `url`, `agent`, …, per holder.
+- **Art:** `tokenURI` is a built-in on-chain card. The artist can point it at a better renderer (`setRenderer`); one
+  that fails falls back to the card. `lockRenderer()` freezes the art forever, and `setArtist(address(0))` renounces
+  the role.
 
-**If POOL4 can't take a fee** (no liquidity, a broken hook), the ETH goes to the IMD6900 NFT pot (`0xA160…6444`)
-instead, so the registry never stops. A partial fill counts as "can't".
+## The burner (LARPBurner)
 
-## LARP links: frens, crews, ranks
+`burn(minImd)` spends what's waiting, up to 0.1 ETH a call. Anyone can call it, and fees call it on the way in.
+1. **POOL4,** IMD's ETH/$IMD pool (1%, spacing 60): the volume goes there.
+2. **If POOL4 can't take the trade** (IMD closed it, it's empty, its hook refuses), the **hookless ETH/$IMD pool**
+   (1%, spacing 200), which nobody can close. It has about 23x POOL4's liquidity.
+3. **If neither can,** the ETH waits for the next `burn`. It is never sent to anyone.
 
-**Frens.** `fren(me, them)` asks; the same call from the other side says yes. `unfren` cuts a link, withdraws an ask
-or declines one. Links are between identities and pass with them.
+**Why not IMD's BurnExecutor:** its owner can rescue the tokens and redirect the burn. `0x…dEaD` can't be undone by
+anyone. `AUDIT.md` lists every dependency and what happens if each one fails.
 
-**Crews.**
-- `foundCrew(captain, name, open, minImd)` costs 0.0069 ETH, burned through POOL4. Crew names are unique among live
-  crews.
-- Open crews take anyone; closed ones take whoever the captain `invite`s.
-- One crew per identity.
-- The captain can `kick`, `passCaptain` and `disband`. The captaincy passes with the captain's identity.
+## Links (LARPLinks)
 
-**The jeet rank.** Every IMD launch pays the swarm through a Merkle distributor.
-- **Proving:** `proveAlloc(launch, round, wallet, amount, proof)` proves an allocation. Anyone can prove anyone's: the
-  proofs are public at `api.imd.fun/launches/<id>?claims=1`.
-- **What's accepted:** only distributors that IMD's launcher (`0xfF03…7120`) names in `distributorOf(launch)`.
-- **What's read, live:** what the wallet claimed and no longer holds is jeeted; what it never claimed is not.
-- **The scores:**
-  - **Level** is the number of swarm launches proven.
-  - **Jeet points** are the jeeted shares added up, in basis points: 10,000 = one launch's allocation, all sold.
-  - **The tier** comes from the average jeeted share: **Lurker** (no launch), **Diamond Hands** (< 10%), **Holder**
-    (< 35%), **Paper Hands** (< 65%), **Jeet** (< 90%), **Jeet Lord**.
-- **Calls:**
-  - `rankOf(imdId)` reads the wallet holding the identity now.
-  - `jeetOfRange` reads a page, for busy wallets.
-  - `cardOf(imdId)` returns holder, name, face, crew, frens, level, points and title in one call.
+- **Frens:** `fren(me, them)` asks; the same call from the other side says yes.
+- **Crews:** `foundCrew` costs 0.0069 ETH, burned. A crew can be open or invite-only, has a captain, and each identity
+  is in one crew at a time.
+- **The jeet rank:** `proveAlloc` proves a wallet's swarm airdrop with IMD's public Merkle proof. Only distributors
+  that IMD's launcher names are accepted. What the wallet claimed and no longer holds is jeeted.
+  - **Level** is the number of launches proven; **jeet points** add up the share sold.
+  - **Tiers:** Lurker, Diamond Hands, Holder, Paper Hands, Jeet, Jeet Lord.
+  - **Reads:** `rankOf`, `jeetOfRange` (paged), `cardOf`.
 
-On the fork, with real proofs: `0x2a89…7dca` claimed the IMD (#739) and ZTO (#737) airdrops and sold every token, so it
-is a Jeet Lord. The IMD6900 treasury holds everything it claimed, so it is Diamond Hands at level 4.
-
-## The launch (`evm_contracts`, Ethereum)
-
-Three contracts, created in this order:
+## The launch (`evm_contracts`, Ethereum), in this order
 
 | contract | constructor arguments |
 |---|---|
+| `LARPBurner` | PoolManager `0x000000000004444c5dc75cB358380D2e3dE08A90`; $IMD `0xD34a99Bc0f67aE1bbd63C660e6d0b0dd03E263B7`; `10000`, `60`, POOL4's hook `0xc6C965Bd164c483e87d0B550671798e9A3602840`; `10000`, `200` (the hookless pool) |
 | `LARP` | identity.md `0x0000eC93127BAA929E58E97dd0095A2BFb38ec1D` |
-| `LARPNames` | identity.md; PoolManager `0x000000000004444c5dc75cB358380D2e3dE08A90`; $IMD `0xD34a99Bc0f67aE1bbd63C660e6d0b0dd03E263B7`; POOL4's hook `0xc6C965Bd164c483e87d0B550671798e9A3602840`; IMD's BurnExecutor `0xe29386719C155B6847aD5a4E97C6674f10ffc750`; the IMD6900 pot `0xA16026A28aA581AA96713d20C608Da7F8db86444` |
-| `LARPLinks` | identity.md; IMD's launcher `0xfF03410d0Fe5fa8f7F59F743de35E333D9857120`; `$contract:LARP`; `$contract:LARPNames` |
+| `LARPNames` | identity.md; `$contract:LARP`; `$contract:LARPBurner`; the artist `0x35dA9C0303507ddf708E87F2568EdDf12c47a059` |
+| `LARPLinks` | identity.md; IMD's launcher `0xfF03410d0Fe5fa8f7F59F743de35E333D9857120`; `$contract:LARP`; `$contract:LARPNames`; `$contract:LARPBurner` |
 
 - The constructors store addresses and call nothing.
 - No CALLCODE, DELEGATECALL or SELFDESTRUCT anywhere.
-- All three fit one transaction.
-- Nothing is done after the launch.
+- About 6M gas for all four, in one transaction.
 
 ## Tests and audit
 
 ```sh
-forge test --offline                                       # 90 tests: unit, fuzz, invariants, a real local v4 POOL4
-MAINNET_RPC_URL=<rpc> forge test --match-contract MainnetFork  # 7 more on Ethereum: real POOL4, BurnExecutor, proofs
+forge test --offline                                           # 118 tests: a real local v4 POOL4 and backup pool
+MAINNET_RPC_URL=<rpc> forge test --match-contract MainnetFork  # 9 more on Ethereum: real POOL4, hookless pool, proofs
 ```
 
-`AUDIT.md` has the pre-launch audit: no critical, high or medium findings. Two lows are fixed and tested; the rest are
-documented.
+On the fork:
+- **POOL4:** 0.0069 ETH buys 1.92 $IMD and sends it to `0x…dEaD`.
+- **The hookless pool** takes over when POOL4 can't (0.05 ETH buys 12.8 $IMD).
+- **A resold name's toll** is burned.
+- **An agent key** runs the IMD6900 treasury's #806.
+- **The jeet board** reads real swarm proofs: a Jeet Lord, and the treasury at Diamond Hands, level 4.
 
-The PoolManager and v4-core under `lib/` are for the tests only (BUSL-1.1 parts never deployed). The contracts import
-nothing outside `src/`.
+`AUDIT.md`: no critical, high or medium findings. Two lows are fixed with tests; the rest are documented, with the
+full trust table.
+
+Libraries under `lib/`: solady's `ERC721` and `Base64` (MIT) are compiled in. forge-std and v4-core are for the tests
+only.

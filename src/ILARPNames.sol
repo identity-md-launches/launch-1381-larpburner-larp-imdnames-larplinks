@@ -2,63 +2,101 @@
 pragma solidity ^0.8.26;
 
 /// @title LARP names: name.imd, by the IMD6900 frens
-/// @notice ENS-style names for identity.md. Each identity can hold one name, `<label>.imd`, unique across all of them.
-/// The name belongs to the identity and passes with it on a sale; its fee buys $IMD on POOL4 and burns it. A wallet
-/// picks a primary identity (its reverse record), and each holder keeps text records on its identities (x, url,
-/// agent, ...), which a new holder starts over.
+/// @notice ENS-style names as ERC-721 NFTs, traded like any NFT. Anyone can register a free name for its price; the
+/// owner links it to an identity.md it holds, and the identity shows it while the owner holds both. Every fee buys
+/// $IMD and burns it: the registration, a 6.9% royalty on secondary sales (ERC-2981, paid to the burner by markets
+/// that honour royalties), and the toll every new owner pays once to link the name, which no market can skip.
+/// @dev A name's token id is its label (a bytes32, left-aligned) as a uint256.
 interface ILARPNames {
-    event NameRegistered(
-        uint256 indexed imdId, bytes32 indexed label, address indexed holder, uint256 paid, uint256 imdBurned
-    );
-    event NameReleased(uint256 indexed imdId, bytes32 indexed label);
-    event NameMoved(uint256 indexed from, uint256 indexed to, bytes32 indexed label);
+    event NameRegistered(uint256 indexed tokenId, bytes32 indexed label, address indexed to, uint256 paid);
+    event NameLinked(uint256 indexed tokenId, uint256 indexed imdId, address indexed holder, uint256 toll);
+    event NameUnlinked(uint256 indexed tokenId, uint256 indexed imdId);
     event PrimarySet(address indexed wallet, uint256 indexed imdId);
     event TextSet(uint256 indexed imdId, address indexed holder, string key, string value);
+    event RendererSet(address renderer);
+    event ArtistSet(address artist);
+    event RendererLocked();
 
-    /// @notice The caller does not own the identity.
+    /// @notice The caller controls no such identity (its owner or agent).
     error NotYourIdentity();
     /// @notice A label is 1 to 32 of a-z, 0-9 and '-', not starting or ending with '-'.
     error BadName();
-    /// @notice Another identity holds this name.
-    error NameTaken();
-    /// @notice The ETH sent is not the name's price.
+    /// @notice The ETH sent is not the price (or toll) due.
     error WrongPrice();
-    /// @notice The identity has no name to release or move.
-    error NoName();
-    /// @notice The identity receiving a name already has one.
-    error HasName();
+    /// @notice No such name.
+    error NoSuchName();
+    /// @notice The identity's owner doesn't own this name.
+    error NotYourName();
+    /// @notice Only the identity's controller or the name's owner can unlink.
+    error NotYours();
+    /// @notice Only the artist can change the renderer.
+    error NotArtist();
+    /// @notice The renderer is locked for good.
+    error Locked();
 
     /// @notice ".imd"
     function TLD() external view returns (string memory);
-    /// @notice The identity.md collection.
+    /// @notice The royalty on secondary sales, in basis points (690 = 6.9%), paid to the burner.
+    function ROYALTY_BPS() external view returns (uint256);
+    /// @notice identity.md.
     function IDENTITY() external view returns (address);
+    /// @notice The burner every fee goes to.
+    function BURNER() external view returns (address);
 
-    /// @notice The price of a label in ETH: 0.069 for 1 to 3 characters, 0.0169 for 4, 0.0069 for 5 or more.
+    /// @notice A label's price in ETH: 0.069 for 1 to 3 characters, 0.0169 for 4, 0.0069 for 5 or more.
     function priceOf(bytes32 label) external pure returns (uint256);
-    /// @notice Identity `imdId` takes the name `label`.imd, paying exactly its price, which buys at least `minImd`
-    /// $IMD on POOL4 for IMD's burn (0 for no minimum). Any name it had is released.
-    function register(uint256 imdId, bytes32 label, uint256 minImd) external payable;
-    /// @notice Identity `imdId` gives up its name; anyone can take it.
-    function release(uint256 imdId) external;
-    /// @notice Moves identity `from`'s name to identity `to`, both the caller's; `to` must have none.
-    function moveName(uint256 from, uint256 to) external;
-    /// @notice The caller's primary identity, shown for its wallet (the reverse record). Live while it holds it.
+    /// @notice What linking name `tokenId` costs its owner now: 0 if the owner registered it or already paid, else
+    /// the name's price.
+    function tollOf(uint256 tokenId) external view returns (uint256);
+    /// @notice Registers `label`.imd as an NFT to `to`, paying exactly its price, which buys at least `minImd` $IMD to
+    /// burn (0: no minimum; the burn may also wait in the burner). Anyone can register any free name.
+    function register(bytes32 label, address to, uint256 minImd) external payable returns (uint256 tokenId);
+    /// @notice Links name `tokenId` to identity `imdId`: the caller controls the identity, whose owner owns the name.
+    /// A new owner's first link pays the toll (tollOf), burned like a fee. The identity's old name and the name's old
+    /// identity are unlinked.
+    function link(uint256 tokenId, uint256 imdId, uint256 minImd) external payable;
+    /// @notice Unlinks identity `imdId`'s name: its controller or the name's owner can.
+    function unlink(uint256 imdId) external;
+    /// @notice The caller's primary identity (the reverse record of its wallet), live while it holds it.
     function setPrimary(uint256 imdId) external;
-    /// @notice Sets the caller's text record `key` on identity `imdId` ("" deletes it).
+    /// @notice Sets the text record `key` of identity `imdId` (x, url, agent, ...) for its owner; its owner or agent
+    /// can. A new owner starts with none.
     function setText(uint256 imdId, string calldata key, string calldata value) external;
-    /// @notice Spends the ETH sent on $IMD on POOL4 for IMD's burn: anyone can add volume.
-    function burn(uint256 minImd) external payable returns (uint256 imd);
 
-    /// @notice Identity `imdId`'s label, or bytes32(0).
-    function labelOf(uint256 imdId) external view returns (bytes32);
-    /// @notice Identity `imdId`'s name with ".imd", or "".
+    /// @notice The label of name `tokenId` and the name with ".imd".
+    function nameOfToken(uint256 tokenId) external pure returns (string memory);
+    /// @notice Identity `imdId`'s live name ("kek.imd"), or "".
     function nameOf(uint256 imdId) external view returns (string memory);
-    /// @notice The identity holding `label` and the wallet holding that identity now.
-    function resolve(bytes32 label) external view returns (bool exists, uint256 imdId, address holder);
+    /// @notice The identity name `tokenId` is linked to, live while its owner holds both.
+    function identityOf(uint256 tokenId) external view returns (uint256 imdId, bool live);
+    /// @notice `label`: whether it is registered, its owner, and the identity it shows on (`linked`).
+    function resolve(bytes32 label) external view returns (bool exists, address owner, uint256 imdId, bool linked);
     /// @notice `resolve` for "kek" or "kek.imd".
-    function resolveName(string calldata name) external view returns (bool exists, uint256 imdId, address holder);
-    /// @notice `wallet`'s primary identity and its name; `live` while the wallet still holds it.
-    function primaryOf(address wallet) external view returns (uint256 imdId, string memory name, bool live);
-    /// @notice The text record `key` of identity `imdId`, as set by the wallet holding it now.
+    function resolveName(string calldata full)
+        external
+        view
+        returns (bool exists, address owner, uint256 imdId, bool linked);
+    /// @notice `wallet`'s primary identity and its name; `live` while the wallet holds it.
+    function primaryOf(address wallet) external view returns (uint256 imdId, string memory full, bool live);
+    /// @notice Identity `imdId`'s text record `key`, as its owner now set it.
     function text(uint256 imdId, string calldata key) external view returns (string memory);
+
+    /// @notice Who may change the renderer (until it is locked).
+    function artist() external view returns (address);
+    /// @notice The renderer drawing the names (address(0): the built-in one).
+    function renderer() external view returns (address);
+    /// @notice Whether the renderer is locked for good.
+    function rendererLocked() external view returns (bool);
+    /// @notice The artist points tokenURI at a new renderer. The only thing in LARP anyone can change, and only the
+    /// art: a renderer that fails or answers nothing falls back to the built-in one.
+    function setRenderer(address renderer_) external;
+    /// @notice The artist hands the role on (address(0) renounces it).
+    function setArtist(address artist_) external;
+    /// @notice The artist locks the renderer forever.
+    function lockRenderer() external;
+}
+
+/// @notice A name renderer: draws name `tokenId` (`name` = "kek.imd"), linked to identity `imdIdPlusOne - 1` (0: none).
+interface ILARPNameRenderer {
+    function render(uint256 tokenId, string calldata full, uint256 imdIdPlusOne) external view returns (string memory);
 }

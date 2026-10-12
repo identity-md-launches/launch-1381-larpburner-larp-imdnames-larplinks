@@ -36,9 +36,15 @@ library SafeReads {
     }
 
     /// @dev A string-returning view taking one uint256 (`tokenURI`, `uri`), or "" when the return data is not a
-    /// well-formed ABI string. The string is returned in place inside the copied return data.
-    function text(address target, bytes4 selector, uint256 arg) internal view returns (string memory s) {
-        (bool ok, bytes memory data) = target.staticcall(abi.encodeWithSelector(selector, arg));
+    /// well-formed ABI string.
+    function text(address target, bytes4 selector, uint256 arg) internal view returns (string memory) {
+        return textCall(target, abi.encodeWithSelector(selector, arg), gasleft());
+    }
+
+    /// @dev Any string-returning view, with at most `gasCap` gas, or "" when the return data is not a well-formed ABI
+    /// string. The string is returned in place inside the copied return data.
+    function textCall(address target, bytes memory call, uint256 gasCap) internal view returns (string memory s) {
+        (bool ok, bytes memory data) = target.staticcall{gas: gasCap}(call);
         if (!ok || data.length < 0x40) return "";
         uint256 at;
         assembly ("memory-safe") {

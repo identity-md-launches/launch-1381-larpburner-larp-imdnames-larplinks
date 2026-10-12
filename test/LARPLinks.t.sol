@@ -112,14 +112,14 @@ contract LARPLinksTest is Base {
     }
 
     function test_FoundingACrewBurnsIMD() public {
-        uint256 before = imd.balanceOf(burnExecutor);
+        uint256 before = imd.balanceOf(DEAD);
         vm.expectEmit(address(links));
         emit CrewFounded(1, 0, _label("kek-crew"), true);
         uint256 id = _found(alice, 0, "kek-crew", true);
         assertEq(id, 1);
-        assertGt(imd.balanceOf(burnExecutor), before, "the fee bought $IMD for IMD's burn");
+        assertGt(imd.balanceOf(DEAD), before, "the fee bought $IMD for 0x..dEaD");
         assertEq(address(links).balance, 0);
-        assertEq(address(names).balance, 0);
+        assertEq(address(burner).balance, 0);
         (uint256 captain, bytes32 name, uint256 members, bool open, bool alive) = links.crew(1);
         assertEq(captain, 0);
         assertEq(name, _label("kek-crew"));
@@ -472,11 +472,10 @@ contract LARPLinksTest is Base {
     // ------------------------------------------------------------------ cards
 
     function test_Card() public {
-        // a name, a face, a crew, a fren and a rank
-        uint256 price = names.priceOf(_label("kekmaster"));
+        // a name, a crew, a fren and a rank
+        uint256 kek = _register(alice, "kekmaster");
         vm.prank(alice);
-        names.register{value: price}(0, _label("kekmaster"), 0);
-        identity.mint(alice, 50); // a token of another collection would do; identity.md can't be a face
+        names.link(kek, 0, 0);
         vm.prank(alice);
         links.foundCrew{value: CREW}(0, _label("kek-crew"), true, 0);
         vm.prank(alice);

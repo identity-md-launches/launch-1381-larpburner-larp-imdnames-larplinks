@@ -9,6 +9,8 @@ import {SafeReads} from "./SafeReads.sol";
 /// ERC-1155). A placement shows while the wallet that made it holds both the identity and the NFT, so a sale of
 /// either takes it down with nobody acting, and a new owner chooses again. An ERC-721 shows on one identity at a time;
 /// a wallet's ERC-1155 copies show on as many slots as it holds copies.
+/// Each identity's owner can name an agent, a key its IMD agent holds, that acts for the identity across LARP without
+/// the owner's wallet sending anything: one EIP-712 signature (or one call) connects it, a sale disconnects it.
 /// @dev No owner, no roles, no upgrades, no funds. It calls other contracts by STATICCALL only, so nothing it calls can
 /// change state or re-enter. Trust in a collection is the reader's call: the registry proves only what the
 /// collection's own `ownerOf` / `balanceOf` answers, as ENS avatars do.
@@ -21,6 +23,18 @@ contract LARP is ILARP {
         address collection;
         uint256 tokenId;
     }
+
+    struct Agent {
+        address holder;
+        address agent;
+    }
+
+    bytes32 internal constant SET_AGENT_TYPEHASH =
+        keccak256("SetAgent(uint256 imdId,address agent,address holder,uint256 nonce,uint256 deadline)");
+    bytes32 internal constant DOMAIN_TYPEHASH =
+        keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
+    /// @dev secp256k1n / 2: higher s values are the malleable twin of a signature
+    uint256 internal constant HALF_N = 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0;
 
     /// @inheritdoc ILARP
     address public immutable IDENTITY;
@@ -35,12 +49,114 @@ contract LARP is ILARP {
     /// @dev How many spots hold a copy of each ERC-1155 placed by each holder.
     mapping(address holder => mapping(address collection => mapping(uint256 id => uint256))) internal _copies;
 
+    /// @dev identity => its agent and the owner who named it
+    mapping(uint256 imdId => Agent) internal _agents;
+    /// @dev agent => the identity it was last named the agent of, plus one
+    mapping(address agent => uint256) internal _agentIdentity;
+    /// @inheritdoc ILARP
+    mapping(address holder => uint256) public nonces;
+
     error ZeroIdentity();
 
     /// @param identity the identity.md collection (Ethereum: 0x0000eC93127BAA929E58E97dd0095A2BFb38ec1D)
     constructor(address identity) {
         if (identity == address(0)) revert ZeroIdentity();
         IDENTITY = identity;
+    }
+
+    // --- agents ---
+
+    /// @inheritdoc ILARP
+    function setAgent(uint256 imdId, address agent) external {
+        if (IDENTITY.ownerOf(imdId, gasleft()) != msg.sender) revert NotYourIdentity();
+        ++nonces[msg.sender];
+        _setAgent(imdId, msg.sender, agent);
+    }
+
+    /// @inheritdoc ILARP
+    function setAgentBySig(uint256 imdId, address agent, uint256 deadline, bytes calldata signature) external {
+        if (block.timestamp > deadline) revert Expired();
+        address holder = IDENTITY.ownerOf(imdId, gasleft());
+        if (holder == address(0)) revert NoSuchIdentity();
+        uint256 nonce = nonces[holder]++;
+        bytes32 digest = keccak256(
+            abi.encodePacked(
+                "\x19\x01",
+                DOMAIN_SEPARATOR(),
+                keccak256(abi.encode(SET_AGENT_TYPEHASH, imdId, agent, holder, nonce, deadline))
+            )
+        );
+        if (!_signedBy(holder, digest, signature)) revert BadSignature();
+        _setAgent(imdId, holder, agent);
+    }
+
+    /// @inheritdoc ILARP
+    function resignAgent(uint256 imdId) external {
+        Agent storage a = _agents[imdId];
+        if (a.agent != msg.sender || msg.sender == address(0)) revert NotTheAgent();
+        emit AgentSet(imdId, a.holder, address(0));
+        delete _agents[imdId];
+    }
+
+    /// @inheritdoc ILARP
+    function agentOf(uint256 imdId) public view returns (address agent, bool live) {
+        Agent storage a = _agents[imdId];
+        agent = a.agent;
+        live = agent != address(0) && IDENTITY.ownerOf(imdId, gasleft()) == a.holder;
+    }
+
+    /// @inheritdoc ILARP
+    function identityOfAgent(address agent) external view returns (uint256 imdId, bool live) {
+        uint256 at = _agentIdentity[agent];
+        if (at == 0) return (0, false);
+        imdId = at - 1;
+        (address current, bool l) = agentOf(imdId);
+        live = l && current == agent;
+    }
+
+    /// @inheritdoc ILARP
+    function canAct(uint256 imdId, address who) public view returns (bool ok, address holder) {
+        holder = IDENTITY.ownerOf(imdId, gasleft());
+        if (holder == address(0) || who == address(0)) return (false, holder);
+        if (who == holder) return (true, holder);
+        Agent storage a = _agents[imdId];
+        ok = a.agent == who && a.holder == holder;
+    }
+
+    /// @inheritdoc ILARP
+    function DOMAIN_SEPARATOR() public view returns (bytes32) {
+        return keccak256(abi.encode(DOMAIN_TYPEHASH, keccak256("LARP"), keccak256("1"), block.chainid, address(this)));
+    }
+
+    function _setAgent(uint256 imdId, address holder, address agent) internal {
+        if (agent == address(0)) {
+            delete _agents[imdId];
+        } else {
+            _agents[imdId] = Agent(holder, agent);
+            _agentIdentity[agent] = imdId + 1;
+        }
+        emit AgentSet(imdId, holder, agent);
+    }
+
+    /// @dev An EOA's 65-byte signature (low s, v 27 or 28), or a contract wallet's ERC-1271 approval.
+    function _signedBy(address signer, bytes32 digest, bytes calldata signature) internal view returns (bool) {
+        if (signature.length == 65) {
+            bytes32 r;
+            bytes32 s;
+            uint8 v;
+            assembly {
+                r := calldataload(signature.offset)
+                s := calldataload(add(signature.offset, 0x20))
+                v := byte(0, calldataload(add(signature.offset, 0x40)))
+            }
+            if (uint256(s) <= HALF_N && (v == 27 || v == 28)) {
+                address recovered = ecrecover(digest, v, r, s);
+                if (recovered != address(0) && recovered == signer) return true;
+            }
+        }
+        if (signer.code.length == 0) return false;
+        (bool ok, bytes memory answer) = signer.staticcall(abi.encodeWithSelector(0x1626ba7e, digest, signature));
+        return ok && answer.length >= 32 && bytes4(abi.decode(answer, (bytes32))) == 0x1626ba7e;
     }
 
     // --- placing ---
@@ -67,32 +183,37 @@ contract LARP is ILARP {
         _takeOff(imdId, slot);
     }
 
+    /// @dev The caller is the identity's owner or agent; the placement is the owner's, with the owner's NFT.
     function _place(uint256 imdId, uint256 slot, address collection, uint256 tokenId, Kind kind) internal {
-        if (IDENTITY.ownerOf(imdId, gasleft()) != msg.sender) revert NotYourIdentity();
+        (bool ok, address holder) = canAct(imdId, msg.sender);
+        if (!ok) revert NotYourIdentity();
         if (collection == IDENTITY) revert NotAMask();
 
         // whatever was in this slot comes off first (no event: the new placement replaces it)
         _remove(imdId, slot, false);
         if (kind == Kind.ERC721) {
-            if (collection.ownerOf(tokenId, gasleft()) != msg.sender) revert NotYours();
+            if (collection.ownerOf(tokenId, gasleft()) != holder) revert NotYours();
             uint256 at = _placed[collection][tokenId];
             // the token comes off wherever else it was
             if (at != 0) _remove((at - 1) >> 4, (at - 1) & 15, true);
             _placed[collection][tokenId] = 1 + imdId * 16 + slot;
         } else {
-            uint256 used = _copies[msg.sender][collection][tokenId] + 1;
-            if (collection.balanceOf(msg.sender, tokenId, gasleft()) < used) revert NotYours();
-            _copies[msg.sender][collection][tokenId] = used;
+            uint256 used = _copies[holder][collection][tokenId] + 1;
+            if (collection.balanceOf(holder, tokenId, gasleft()) < used) revert NotYours();
+            _copies[holder][collection][tokenId] = used;
         }
-        _spots[imdId][slot] = Spot(msg.sender, kind, collection, tokenId);
-        if (slot == 0) emit FaceSet(imdId, msg.sender, collection, tokenId);
-        else emit ItemEquipped(imdId, slot, msg.sender, collection, tokenId, kind);
+        _spots[imdId][slot] = Spot(holder, kind, collection, tokenId);
+        if (slot == 0) emit FaceSet(imdId, holder, collection, tokenId);
+        else emit ItemEquipped(imdId, slot, holder, collection, tokenId, kind);
     }
 
     function _takeOff(uint256 imdId, uint256 slot) internal {
-        address holder = _spots[imdId][slot].holder;
-        if (holder == address(0)) return;
-        if (msg.sender != holder && IDENTITY.ownerOf(imdId, gasleft()) != msg.sender) revert NotYourPlacement();
+        address placer = _spots[imdId][slot].holder;
+        if (placer == address(0)) return;
+        if (msg.sender != placer) {
+            (bool ok,) = canAct(imdId, msg.sender);
+            if (!ok) revert NotYourPlacement();
+        }
         _remove(imdId, slot, true);
     }
 

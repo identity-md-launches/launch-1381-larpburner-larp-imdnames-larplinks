@@ -18,6 +18,7 @@ remappings = [
     "forge-std/=lib/forge-std/src/",
     "@uniswap/v4-core/=lib/v4-core/",
     "solmate/=lib/solmate/",
+    "solady/=lib/solady/src/",
 ]
 
 [invariant]

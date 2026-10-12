@@ -17,6 +17,7 @@ import {ILARP} from "../src/ILARP.sol";
 import {LARPNames} from "../src/LARPNames.sol";
 import {ILARPNames} from "../src/ILARPNames.sol";
 import {LARPLinks} from "../src/LARPLinks.sol";
+import {LARPBurner} from "../src/LARPBurner.sol";
 import {MockNFT} from "./Mocks.sol";
 
 /// @dev An ERC-1155 with the one read LARP makes, a free mint and a transfer.
@@ -64,7 +65,11 @@ contract LiquidityAdder {
     function unlockCallback(bytes calldata data) external returns (bytes memory) {
         (V4PoolKey memory key, int256 liquidity, address payer) = abi.decode(data, (V4PoolKey, int256, address));
         (BalanceDelta delta,) = pm.modifyLiquidity(
-            key, ModifyLiquidityParams(TickMath.minUsableTick(60), TickMath.maxUsableTick(60), liquidity, 0), ""
+            key,
+            ModifyLiquidityParams(
+                TickMath.minUsableTick(key.tickSpacing), TickMath.maxUsableTick(key.tickSpacing), liquidity, 0
+            ),
+            ""
         );
         uint256 eth = uint256(uint128(-delta.amount0()));
         uint256 tokens = uint256(uint128(-delta.amount1()));
@@ -76,11 +81,6 @@ contract LiquidityAdder {
         return "";
     }
 
-    receive() external payable {}
-}
-
-/// @dev The NFT pot standing in for IMD6900's hook: takes ETH.
-contract Pot {
     receive() external payable {}
 }
 
@@ -119,47 +119,66 @@ contract MockDistributor {
 }
 
 abstract contract Base is Test {
-    // Uniswap v4's MIN_SQRT_PRICE + 1, as BuysIMD uses
+    // Uniswap v4's MIN_SQRT_PRICE + 1, as LARPBurner uses
     uint160 constant MIN_PRICE_LIMIT = 4295128740;
+
+    address constant DEAD = 0x000000000000000000000000000000000000dEaD;
 
     MockNFT identity;
     MockIMD imd;
     PoolManager pm;
     LiquidityAdder adder;
-    Pot pot;
-    address burnExecutor = makeAddr("burn executor");
     V4PoolKey pool4;
+    V4PoolKey backup;
 
+    LARPBurner burner;
     LARP larp;
     LARPNames names;
     LARPLinks links;
     MockLauncher launcher;
+    address artist = makeAddr("artist");
 
     address alice = makeAddr("alice");
     address bob = makeAddr("bob");
     address carol = makeAddr("carol");
 
+    /// @dev The protocol on a local PoolManager, with POOL4 (1%, spacing 60) and the backup pool (1%, spacing 200)
+    /// initialized at 1 ETH ~ 2,000 IMD and empty.
     function _deploy() internal {
         identity = new MockNFT("identity://");
         imd = new MockIMD();
         pm = new PoolManager(address(this));
         adder = new LiquidityAdder(IPoolManager(address(pm)));
-        pot = new Pot();
         launcher = new MockLauncher();
         pool4 = V4PoolKey(Currency.wrap(address(0)), Currency.wrap(address(imd)), 10_000, 60, IHooks(address(0)));
-        // $IMD at about 0.0005 ETH, as on Ethereum: 1 ETH ~ 2,000 IMD (tick ~ ln(2000)/ln(1.0001) ~ 76,000)
+        backup = V4PoolKey(Currency.wrap(address(0)), Currency.wrap(address(imd)), 10_000, 200, IHooks(address(0)));
+        // tick ~ ln(2000)/ln(1.0001) ~ 76,000
         pm.initialize(pool4, TickMath.getSqrtPriceAtTick(76_020));
+        pm.initialize(backup, TickMath.getSqrtPriceAtTick(76_000));
 
+        burner = new LARPBurner(address(pm), address(imd), 10_000, 60, address(0), 10_000, 200);
         larp = new LARP(address(identity));
-        names = new LARPNames(address(identity), address(pm), address(imd), address(0), burnExecutor, address(pot));
-        links = new LARPLinks(address(identity), address(launcher), larp, names);
+        names = new LARPNames(address(identity), larp, address(burner), artist);
+        links = new LARPLinks(address(identity), address(launcher), larp, names, address(burner));
+        imd.mint(address(this), 1e30);
+        imd.approve(address(adder), type(uint256).max);
+        vm.deal(address(this), 10_000 ether);
     }
 
     function _fillPool4() internal {
-        imd.mint(address(this), 1e30);
-        imd.approve(address(adder), type(uint256).max);
-        vm.deal(address(this), 1_000 ether);
         adder.add{value: 1_000 ether}(pool4, 1e21);
+    }
+
+    function _fillBackup() internal {
+        adder.add{value: 1_000 ether}(backup, 1e21);
+    }
+
+    function _register(address who, string memory label) internal returns (uint256 tokenId) {
+        bytes32 l = _label(label);
+        uint256 price = names.priceOf(l);
+        vm.deal(who, who.balance + price);
+        vm.prank(who);
+        tokenId = names.register{value: price}(l, who, 0);
     }
 
     function _label(string memory s) internal pure returns (bytes32 label) {

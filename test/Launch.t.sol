@@ -5,68 +5,79 @@ import {Test} from "forge-std/Test.sol";
 import {LARP} from "../src/LARP.sol";
 import {LARPNames} from "../src/LARPNames.sol";
 import {LARPLinks} from "../src/LARPLinks.sol";
+import {LARPBurner} from "../src/LARPBurner.sol";
 
-/// @dev What IMD's `evm_contracts` launch needs: three contracts created in one transaction, constructor arguments
+/// @dev What IMD's `evm_contracts` launch needs: four contracts created in one transaction, constructor arguments
 /// only, nothing called.
 contract LaunchTest is Test {
     address constant IDENTITY = 0x0000eC93127BAA929E58E97dd0095A2BFb38ec1D;
     address constant POOL_MANAGER = 0x000000000004444c5dc75cB358380D2e3dE08A90;
     address constant IMD = 0xD34a99Bc0f67aE1bbd63C660e6d0b0dd03E263B7;
     address constant POOL4_HOOK = 0xc6C965Bd164c483e87d0B550671798e9A3602840;
-    address constant IMD_BURN = 0xe29386719C155B6847aD5a4E97C6674f10ffc750;
-    address constant IMD6900_POT = 0xA16026A28aA581AA96713d20C608Da7F8db86444;
     address constant LAUNCHER = 0xfF03410d0Fe5fa8f7F59F743de35E333D9857120;
+    address constant ARTIST = 0x35dA9C0303507ddf708E87F2568EdDf12c47a059;
 
-    function _launch() internal returns (LARP larp, LARPNames names, LARPLinks links) {
+    function _burnerArgs() internal pure returns (bytes memory) {
+        return abi.encode(POOL_MANAGER, IMD, uint24(10_000), int24(60), POOL4_HOOK, uint24(10_000), int24(200));
+    }
+
+    function _launch() internal returns (LARPBurner burner, LARP larp, LARPNames names, LARPLinks links) {
+        burner = new LARPBurner(POOL_MANAGER, IMD, 10_000, 60, POOL4_HOOK, 10_000, 200);
         larp = new LARP(IDENTITY);
-        names = new LARPNames(IDENTITY, POOL_MANAGER, IMD, POOL4_HOOK, IMD_BURN, IMD6900_POT);
-        links = new LARPLinks(IDENTITY, LAUNCHER, larp, names);
+        names = new LARPNames(IDENTITY, larp, address(burner), ARTIST);
+        links = new LARPLinks(IDENTITY, LAUNCHER, larp, names, address(burner));
     }
 
     function test_DeploysOnAFreshChain() public {
         // nothing exists at any of these addresses here: the constructors call nothing
-        assertEq(IDENTITY.code.length + POOL_MANAGER.code.length + LAUNCHER.code.length, 0);
-        (LARP larp, LARPNames names, LARPLinks links) = _launch();
+        assertEq(IDENTITY.code.length + POOL_MANAGER.code.length + LAUNCHER.code.length + IMD.code.length, 0);
+        (LARPBurner burner, LARP larp, LARPNames names, LARPLinks links) = _launch();
+        assertEq(address(burner.POOL_MANAGER()), POOL_MANAGER);
+        assertEq(burner.IMD(), IMD);
+        assertEq(burner.POOL4_HOOK(), POOL4_HOOK);
+        assertEq(burner.POOL4_FEE(), 10_000);
+        assertEq(burner.POOL4_SPACING(), 60);
+        assertEq(burner.BACKUP_FEE(), 10_000);
+        assertEq(burner.BACKUP_SPACING(), 200);
         assertEq(larp.IDENTITY(), IDENTITY);
         assertEq(names.IDENTITY(), IDENTITY);
-        assertEq(address(names.POOL_MANAGER()), POOL_MANAGER);
-        assertEq(names.IMD(), IMD);
-        assertEq(names.POOL4_HOOK(), POOL4_HOOK);
-        assertEq(names.IMD_BURN(), IMD_BURN);
-        assertEq(names.FALLBACK(), IMD6900_POT);
+        assertEq(address(names.LARP()), address(larp));
+        assertEq(names.BURNER(), address(burner));
+        assertEq(names.artist(), ARTIST);
         assertEq(links.IDENTITY(), IDENTITY);
         assertEq(links.LAUNCHER(), LAUNCHER);
         assertEq(address(links.LARP()), address(larp));
         assertEq(address(links.NAMES()), address(names));
+        assertEq(links.BURNER(), address(burner));
     }
 
     function test_FitsOneTransaction() public {
         uint256 g = gasleft();
         _launch();
         uint256 used = g - gasleft();
-        emit log_named_uint("launch gas, three creations", used);
-        // IMD's launcher adds about 0.8M, and the creation code is calldata: 2^24 is the cap
-        assertLt(used + 800_000 + 4 * 10 * _initcodeBytes(), 12_000_000);
+        emit log_named_uint("launch gas, four creations", used);
+        // IMD's launcher adds about 0.8M, and the creation code is calldata (EIP-7623: up to 40 gas a byte): 2^24 cap
+        assertLt(used + 800_000 + 40 * _initcodeBytes(), 1 << 24);
     }
 
     function _initcodeBytes() internal pure returns (uint256) {
-        return
-            type(LARP).creationCode.length + type(LARPNames).creationCode.length + type(LARPLinks).creationCode.length;
+        return type(LARPBurner).creationCode.length + type(LARP).creationCode.length
+            + type(LARPNames).creationCode.length + type(LARPLinks).creationCode.length;
     }
 
     function test_PassesTheAdmissionScan() public {
-        (LARP larp, LARPNames names, LARPLinks links) = _launch();
+        (LARPBurner burner, LARP larp, LARPNames names, LARPLinks links) = _launch();
+        _scan(bytes.concat(type(LARPBurner).creationCode, _burnerArgs()), "LARPBurner creation code");
         _scan(bytes.concat(type(LARP).creationCode, abi.encode(IDENTITY)), "LARP creation code");
         _scan(
-            bytes.concat(
-                type(LARPNames).creationCode, abi.encode(IDENTITY, POOL_MANAGER, IMD, POOL4_HOOK, IMD_BURN, IMD6900_POT)
-            ),
+            bytes.concat(type(LARPNames).creationCode, abi.encode(IDENTITY, larp, burner, ARTIST)),
             "LARPNames creation code"
         );
         _scan(
-            bytes.concat(type(LARPLinks).creationCode, abi.encode(IDENTITY, LAUNCHER, larp, names)),
+            bytes.concat(type(LARPLinks).creationCode, abi.encode(IDENTITY, LAUNCHER, larp, names, burner)),
             "LARPLinks creation code"
         );
+        _scan(address(burner).code, "LARPBurner");
         _scan(address(larp).code, "LARP");
         _scan(address(names).code, "LARPNames");
         _scan(address(links).code, "LARPLinks");
@@ -84,7 +95,8 @@ contract LaunchTest is Test {
     }
 
     function test_UnderTheCodeSizeLimit() public {
-        (LARP larp, LARPNames names, LARPLinks links) = _launch();
+        (LARPBurner burner, LARP larp, LARPNames names, LARPLinks links) = _launch();
+        assertLt(address(burner).code.length, 24_576);
         assertLt(address(larp).code.length, 24_576);
         assertLt(address(names).code.length, 24_576);
         assertLt(address(links).code.length, 24_576);
