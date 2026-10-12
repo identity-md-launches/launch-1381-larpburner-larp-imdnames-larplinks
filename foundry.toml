@@ -1,0 +1,24 @@
+# IMD Face: the face standard of the identity.md ecosystem, launched through the IMD swarm on Ethereum. Builds offline:
+# forge-std is vendored under lib/ (tests and scripts only; the contract imports nothing). bytecode_hash = "none", as
+# IMD's launches require.
+[profile.default]
+src = "src"
+test = "test"
+script = "script"
+out = "out"
+libs = ["lib"]
+solc = "0.8.30"
+bytecode_hash = "none"
+optimizer = true
+optimizer_runs = 200
+via_ir = true
+evm_version = "cancun"
+remappings = ["forge-std/=lib/forge-std/src/"]
+
+[invariant]
+runs = 128
+depth = 64
+fail_on_revert = false
+
+[rpc_endpoints]
+mainnet = "${MAINNET_RPC_URL}"
