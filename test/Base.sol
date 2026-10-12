@@ -14,8 +14,8 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
 import {LARP} from "../src/LARP.sol";
 import {ILARP} from "../src/ILARP.sol";
-import {LARPNames} from "../src/LARPNames.sol";
-import {ILARPNames} from "../src/ILARPNames.sol";
+import {IMDNames} from "../src/IMDNames.sol";
+import {IIMDNames} from "../src/IIMDNames.sol";
 import {LARPLinks} from "../src/LARPLinks.sol";
 import {LARPBurner} from "../src/LARPBurner.sol";
 import {Attestation} from "../src/SwarmPrices.sol";
@@ -210,7 +210,7 @@ abstract contract Base is Test {
     uint256 oracleKey = 0x0A11CE0;
     address oracleSigner;
     LARP larp;
-    LARPNames names;
+    IMDNames names;
     LARPLinks links;
     MockLauncher launcher;
     address artist = makeAddr("artist");
@@ -245,7 +245,7 @@ abstract contract Base is Test {
         intake = new MockIntake();
         oracleSigner = vm.addr(oracleKey);
         larp = new LARP(address(identity));
-        names = new LARPNames(address(identity), larp, address(burner), artist, address(intake), oracleSigner);
+        names = new IMDNames(address(identity), larp, address(burner), artist, address(intake), oracleSigner);
         links = new LARPLinks(address(identity), address(launcher), larp, names, address(burner));
         imd.mint(address(this), 1e30);
         imd.approve(address(adder), type(uint256).max);

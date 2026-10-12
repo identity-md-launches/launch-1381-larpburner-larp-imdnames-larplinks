@@ -3,7 +3,7 @@ pragma solidity ^0.8.26;
 
 import {Test} from "forge-std/Test.sol";
 import {LARP} from "../src/LARP.sol";
-import {LARPNames} from "../src/LARPNames.sol";
+import {IMDNames} from "../src/IMDNames.sol";
 import {LARPLinks} from "../src/LARPLinks.sol";
 import {LARPBurner} from "../src/LARPBurner.sol";
 
@@ -37,10 +37,10 @@ contract LaunchTest is Test {
         );
     }
 
-    function _launch() internal returns (LARPBurner burner, LARP larp, LARPNames names, LARPLinks links) {
+    function _launch() internal returns (LARPBurner burner, LARP larp, IMDNames names, LARPLinks links) {
         burner = new LARPBurner(POOL_MANAGER, IMD, 10_000, 60, POOL4_HOOK, 10_000, 200, IMD6900, 0, 60, PAIR_HOOK);
         larp = new LARP(IDENTITY);
-        names = new LARPNames(IDENTITY, larp, address(burner), ARTIST, INTAKE, ORACLE_SIGNER);
+        names = new IMDNames(IDENTITY, larp, address(burner), ARTIST, INTAKE, ORACLE_SIGNER);
         links = new LARPLinks(IDENTITY, LAUNCHER, larp, names, address(burner));
     }
 
@@ -51,7 +51,7 @@ contract LaunchTest is Test {
                 + IMD6900.code.length + INTAKE.code.length,
             0
         );
-        (LARPBurner burner, LARP larp, LARPNames names, LARPLinks links) = _launch();
+        (LARPBurner burner, LARP larp, IMDNames names, LARPLinks links) = _launch();
         assertEq(address(burner.POOL_MANAGER()), POOL_MANAGER);
         assertEq(burner.IMD(), IMD);
         assertEq(burner.POOL4_HOOK(), POOL4_HOOK);
@@ -90,18 +90,18 @@ contract LaunchTest is Test {
 
     function _initcodeBytes() internal pure returns (uint256) {
         return type(LARPBurner).creationCode.length + type(LARP).creationCode.length
-            + type(LARPNames).creationCode.length + type(LARPLinks).creationCode.length;
+            + type(IMDNames).creationCode.length + type(LARPLinks).creationCode.length;
     }
 
     function test_PassesTheAdmissionScan() public {
-        (LARPBurner burner, LARP larp, LARPNames names, LARPLinks links) = _launch();
+        (LARPBurner burner, LARP larp, IMDNames names, LARPLinks links) = _launch();
         _scan(bytes.concat(type(LARPBurner).creationCode, _burnerArgs()), "LARPBurner creation code");
         _scan(bytes.concat(type(LARP).creationCode, abi.encode(IDENTITY)), "LARP creation code");
         _scan(
             bytes.concat(
-                type(LARPNames).creationCode, abi.encode(IDENTITY, larp, burner, ARTIST, INTAKE, ORACLE_SIGNER)
+                type(IMDNames).creationCode, abi.encode(IDENTITY, larp, burner, ARTIST, INTAKE, ORACLE_SIGNER)
             ),
-            "LARPNames creation code"
+            "IMDNames creation code"
         );
         _scan(
             bytes.concat(type(LARPLinks).creationCode, abi.encode(IDENTITY, LAUNCHER, larp, names, burner)),
@@ -109,7 +109,7 @@ contract LaunchTest is Test {
         );
         _scan(address(burner).code, "LARPBurner");
         _scan(address(larp).code, "LARP");
-        _scan(address(names).code, "LARPNames");
+        _scan(address(names).code, "IMDNames");
         _scan(address(links).code, "LARPLinks");
     }
 
@@ -125,7 +125,7 @@ contract LaunchTest is Test {
     }
 
     function test_UnderTheCodeSizeLimit() public {
-        (LARPBurner burner, LARP larp, LARPNames names, LARPLinks links) = _launch();
+        (LARPBurner burner, LARP larp, IMDNames names, LARPLinks links) = _launch();
         assertLt(address(burner).code.length, 24_576);
         assertLt(address(larp).code.length, 24_576);
         assertLt(address(names).code.length, 24_576);

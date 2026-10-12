@@ -2,7 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {ILARP} from "./ILARP.sol";
-import {ILARPNames} from "./ILARPNames.sol";
+import {IIMDNames} from "./IIMDNames.sol";
 import {LARPBurner} from "./LARPBurner.sol";
 import {Labels} from "./Labels.sol";
 import {SafeReads} from "./SafeReads.sol";
@@ -70,8 +70,8 @@ contract LARPLinks {
     address public immutable LAUNCHER;
     /// @notice The LARP registry the cards read faces from.
     ILARP public immutable LARP;
-    /// @notice LARP names: the cards' names.
-    ILARPNames public immutable NAMES;
+    /// @notice IMD Names: the cards' names.
+    IIMDNames public immutable NAMES;
     /// @notice The LARP burner crew fees go to.
     address public immutable BURNER;
 
@@ -137,9 +137,9 @@ contract LARPLinks {
     /// @param identity identity.md (Ethereum: 0x0000eC93127BAA929E58E97dd0095A2BFb38ec1D)
     /// @param launcher IMD's launcher (Ethereum: 0xfF03410d0Fe5fa8f7F59F743de35E333D9857120)
     /// @param larp the LARP registry
-    /// @param names LARP names
+    /// @param names IMD Names
     /// @param burner the LARP burner
-    constructor(address identity, address launcher, ILARP larp, ILARPNames names, address burner) {
+    constructor(address identity, address launcher, ILARP larp, IIMDNames names, address burner) {
         if (
             identity == address(0) || launcher == address(0) || address(larp) == address(0)
                 || address(names) == address(0) || burner == address(0)

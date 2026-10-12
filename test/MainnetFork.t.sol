@@ -4,7 +4,7 @@ pragma solidity ^0.8.26;
 import {Test} from "forge-std/Test.sol";
 import {LARP} from "../src/LARP.sol";
 import {ILARP} from "../src/ILARP.sol";
-import {LARPNames} from "../src/LARPNames.sol";
+import {IMDNames} from "../src/IMDNames.sol";
 import {LARPLinks} from "../src/LARPLinks.sol";
 import {LARPBurner} from "../src/LARPBurner.sol";
 import {SwarmPrices, Attestation} from "../src/SwarmPrices.sol";
@@ -42,7 +42,7 @@ contract MainnetForkTest is Test {
 
     LARPBurner burner;
     LARP larp;
-    LARPNames names;
+    IMDNames names;
     LARPLinks links;
 
     function setUp() public {
@@ -51,7 +51,7 @@ contract MainnetForkTest is Test {
         vm.createSelectFork(rpc);
         burner = new LARPBurner(POOL_MANAGER, IMD, 10_000, 60, POOL4_HOOK, 10_000, 200, TREASURY, 0, 60, PAIR_HOOK);
         larp = new LARP(IDENTITY);
-        names = new LARPNames(IDENTITY, larp, address(burner), ARTIST, INTAKE, ORACLE_SIGNER);
+        names = new IMDNames(IDENTITY, larp, address(burner), ARTIST, INTAKE, ORACLE_SIGNER);
         links = new LARPLinks(IDENTITY, LAUNCHER, larp, names, address(burner));
     }
 
@@ -198,7 +198,7 @@ contract MainnetForkTest is Test {
     /// for IMD's oracle key, which only IMD holds) is delivered as the Intake delivers it, and anyone executes it.
     function test_APriceProposalThroughIMDsRealIntake() public forked {
         uint256 key = 0x5EC0;
-        LARPNames n = new LARPNames(IDENTITY, larp, address(burner), ARTIST, INTAKE, vm.addr(key));
+        IMDNames n = new IMDNames(IDENTITY, larp, address(burner), ARTIST, INTAKE, vm.addr(key));
         address proposer = address(0x9909000000000000000000000000000000009909);
         address payTo = 0x4e0fA57Bde726079356537E2F34d671E9F41ADbc;
         deal(IMD, proposer, 1 ether);

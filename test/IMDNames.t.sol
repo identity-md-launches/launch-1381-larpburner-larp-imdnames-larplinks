@@ -2,11 +2,11 @@
 pragma solidity ^0.8.26;
 
 import {Base} from "./Base.sol";
-import {LARPNames} from "../src/LARPNames.sol";
-import {ILARPNames, ILARPNameRenderer} from "../src/ILARPNames.sol";
+import {IMDNames} from "../src/IMDNames.sol";
+import {IIMDNames, IIMDNameRenderer} from "../src/IIMDNames.sol";
 import {LARPBurner} from "../src/LARPBurner.sol";
 
-contract FancyRenderer is ILARPNameRenderer {
+contract FancyRenderer is IIMDNameRenderer {
     function render(uint256, string calldata full, uint256 imdIdPlusOne) external pure returns (string memory) {
         return string.concat("fancy:", full, ":", imdIdPlusOne == 0 ? "unlinked" : "linked");
     }
@@ -24,7 +24,7 @@ contract HungryRenderer {
     }
 }
 
-contract LARPNamesTest is Base {
+contract IMDNamesTest is Base {
     event NameLinked(uint256 indexed tokenId, uint256 indexed imdId, address indexed holder, uint256 toll);
     event NameUnlinked(uint256 indexed tokenId, uint256 indexed imdId);
 
@@ -75,9 +75,9 @@ contract LARPNamesTest is Base {
         vm.startPrank(bob);
         vm.expectRevert(); // solady TokenAlreadyExists
         names.register{value: 0.00069 ether}(_label("kekmaster"), bob, 0);
-        vm.expectRevert(ILARPNames.WrongPrice.selector);
+        vm.expectRevert(IIMDNames.WrongPrice.selector);
         names.register{value: 0.0007 ether}(_label("kekmasters"), bob, 0);
-        vm.expectRevert(ILARPNames.BadName.selector);
+        vm.expectRevert(IIMDNames.BadName.selector);
         names.register{value: 0.00069 ether}(_label("Kek"), bob, 0);
         vm.expectRevert(); // solady TransferToZeroAddress
         names.register{value: 0.00069 ether}(_label("nobody-here"), address(0), 0);
@@ -103,7 +103,7 @@ contract LARPNamesTest is Base {
             bytes32(uint256(_label("kek")) | 1)
         ];
         for (uint256 i; i < bad.length; ++i) {
-            vm.expectRevert(ILARPNames.BadName.selector);
+            vm.expectRevert(IIMDNames.BadName.selector);
             names.priceOf(bad[i]);
         }
     }
@@ -144,7 +144,7 @@ contract LARPNamesTest is Base {
         _imdPayer(carol);
         uint256 due = burner.quoteImd(0.00069 ether);
         vm.prank(carol);
-        vm.expectRevert(ILARPNames.TooMuchImd.selector);
+        vm.expectRevert(IIMDNames.TooMuchImd.selector);
         names.registerWithImd(_label("paid-in-imd"), carol, due - 1);
     }
 
@@ -194,15 +194,15 @@ contract LARPNamesTest is Base {
     function test_LinkRules() public {
         vm.deal(alice, 1 ether);
         vm.startPrank(alice);
-        vm.expectRevert(ILARPNames.NotYourIdentity.selector);
+        vm.expectRevert(IIMDNames.NotYourIdentity.selector);
         names.link(kek, 2, 0); // bob's identity
-        vm.expectRevert(ILARPNames.NoSuchName.selector);
+        vm.expectRevert(IIMDNames.NoSuchName.selector);
         names.link(uint256(_label("nothing")), 0, 0);
-        vm.expectRevert(ILARPNames.WrongPrice.selector);
+        vm.expectRevert(IIMDNames.WrongPrice.selector);
         names.link{value: 1}(kek, 0, 0); // no toll due
         vm.stopPrank();
         vm.prank(bob);
-        vm.expectRevert(ILARPNames.NotYourName.selector);
+        vm.expectRevert(IIMDNames.NotYourName.selector);
         names.link(kek, 2, 0); // alice's name
     }
 
@@ -254,7 +254,7 @@ contract LARPNamesTest is Base {
 
         vm.deal(bob, 1 ether);
         vm.prank(bob);
-        vm.expectRevert(ILARPNames.WrongPrice.selector);
+        vm.expectRevert(IIMDNames.WrongPrice.selector);
         names.link(kek, 2, 0);
 
         uint256 before = imd.balanceOf(DEAD);
@@ -297,7 +297,7 @@ contract LARPNamesTest is Base {
         vm.prank(alice);
         names.link(kek, 0, 0);
         vm.prank(bob);
-        vm.expectRevert(ILARPNames.NotYours.selector);
+        vm.expectRevert(IIMDNames.NotYours.selector);
         names.unlink(0);
         vm.prank(alice);
         names.unlink(0);
@@ -326,7 +326,7 @@ contract LARPNamesTest is Base {
         assertTrue(names.supportsInterface(0x2a55205a), "ERC-2981");
         assertTrue(names.supportsInterface(0x80ac58cd), "ERC-721");
         assertTrue(names.supportsInterface(0x5b5e139f), "metadata");
-        assertTrue(names.supportsInterface(type(ILARPNames).interfaceId));
+        assertTrue(names.supportsInterface(type(IIMDNames).interfaceId));
     }
 
     function test_ARoyaltyPaymentIsBurned() public {
@@ -383,7 +383,7 @@ contract LARPNamesTest is Base {
     function test_TheArtistChangesTheArtAndOnlyTheArt() public {
         FancyRenderer fancy = new FancyRenderer();
         vm.prank(bob);
-        vm.expectRevert(ILARPNames.NotArtist.selector);
+        vm.expectRevert(IIMDNames.NotArtist.selector);
         names.setRenderer(address(fancy));
 
         vm.prank(artist);
@@ -393,13 +393,13 @@ contract LARPNamesTest is Base {
         vm.prank(artist);
         names.setArtist(bob);
         vm.prank(artist);
-        vm.expectRevert(ILARPNames.NotArtist.selector);
+        vm.expectRevert(IIMDNames.NotArtist.selector);
         names.setRenderer(address(0));
 
         vm.prank(bob);
         names.lockRenderer();
         vm.prank(bob);
-        vm.expectRevert(ILARPNames.Locked.selector);
+        vm.expectRevert(IIMDNames.Locked.selector);
         names.setRenderer(address(0));
         assertTrue(names.rendererLocked());
     }

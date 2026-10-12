@@ -22,7 +22,7 @@ Four contracts on Ethereum, deployed by the IMD swarm.
 |---|---|
 | `LARPBurner` | where every fee goes: ETH becomes $IMD; 6.9% of it buys IMD6900, burned; the rest goes to `0x…dEaD` |
 | `LARP` (`ILARP`) | the avatar standard (a face, eight item slots) and agents |
-| `LARPNames` (`ILARPNames`) | `name.imd` as ERC-721 NFTs: registration, links to identities, reverse and text records, royalties |
+| `IMDNames` (`IIMDNames`) | `name.imd` as ERC-721 NFTs: registration, links to identities, reverse and text records, royalties |
 | `LARPLinks` | frens, crews, the jeet rank, and `cardOf`: everything about an identity in one read |
 
 ## Agents: connect your IMD agent without exposing your wallet
@@ -56,7 +56,7 @@ reverse lookup.
 
 **Reads:** `faceOf`, `itemOf`, `wearerOf`, `faceURI`, `itemURI`, and `avatarOf` (ENSIP-12).
 
-## Names (LARPNames): kek.imd, an NFT
+## Names (IMDNames): kek.imd, an NFT
 
 - **`register(label, to, minImd)`** (ETH) or **`registerWithImd(label, to, maxImd)`** ($IMD, approved first):
   anyone can register any free name and gets an ERC-721.
@@ -83,7 +83,7 @@ reverse lookup.
   that fails falls back to the card. `lockRenderer()` freezes the art forever, and `setArtist(address(0))` renounces
   the role.
 
-## Prices: the swarm judges, anyone executes (SwarmPrices, in LARPNames)
+## Prices: the swarm judges, anyone executes (SwarmPrices, in IMDNames)
 
 1. **Anyone proposes** new prices with `propose(prices, fee)`, paying IMD's oracle its price (0.5 IMD) through IMD's
    Intake. The contract writes the question itself: the current and proposed prices, and LARP's pricing guidelines.
@@ -149,8 +149,8 @@ anyone. `AUDIT.md` lists every dependency and what happens if each one fails.
 |---|---|
 | `LARPBurner` | PoolManager `0x000000000004444c5dc75cB358380D2e3dE08A90`; $IMD `0xD34a99Bc0f67aE1bbd63C660e6d0b0dd03E263B7`; `10000`, `60`, POOL4's hook `0xc6C965Bd164c483e87d0B550671798e9A3602840`; `10000`, `200` (the hookless pool); IMD6900 `0x0000198C940D8cD70Cb9ACeC5E3af8216ac57d2F`, `0`, `60`, the pair hook `0x667f4621030aCfAfb1bD0B64d33610A8567f2A44` |
 | `LARP` | identity.md `0x0000eC93127BAA929E58E97dd0095A2BFb38ec1D` |
-| `LARPNames` | identity.md; `$contract:LARP`; `$contract:LARPBurner`; the artist `0x35dA9C0303507ddf708E87F2568EdDf12c47a059`; IMD's oracle Intake `0xa43e6F75ee006411F79Ac1C84120606C2330DE82`; IMD's oracle signer `0x5598Aa9146215Bc13eb26f2c692Ad1461Fd32982` |
-| `LARPLinks` | identity.md; IMD's launcher `0xfF03410d0Fe5fa8f7F59F743de35E333D9857120`; `$contract:LARP`; `$contract:LARPNames`; `$contract:LARPBurner` |
+| `IMDNames` | identity.md; `$contract:LARP`; `$contract:LARPBurner`; the artist `0x35dA9C0303507ddf708E87F2568EdDf12c47a059`; IMD's oracle Intake `0xa43e6F75ee006411F79Ac1C84120606C2330DE82`; IMD's oracle signer `0x5598Aa9146215Bc13eb26f2c692Ad1461Fd32982` |
+| `LARPLinks` | identity.md; IMD's launcher `0xfF03410d0Fe5fa8f7F59F743de35E333D9857120`; `$contract:LARP`; `$contract:IMDNames`; `$contract:LARPBurner` |
 
 - The constructors store addresses and call nothing.
 - No CALLCODE, DELEGATECALL or SELFDESTRUCT anywhere.

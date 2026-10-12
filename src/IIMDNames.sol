@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-/// @title LARP names: name.imd, by the IMD6900 frens
+/// @title IMD Names: name.imd, from the Linked Avatar Registry Protocol, by the IMD6900 frens
 /// @notice ENS-style names as ERC-721 NFTs, traded like any NFT. Anyone can register a free name for its price; the
 /// owner links it to an identity.md it holds, and the identity shows it while the owner holds both. Every fee buys
 /// $IMD and burns it: the registration, a 6.9% royalty on secondary sales (ERC-2981, paid to the burner by markets
 /// that honour royalties), and the toll every new owner pays once to link the name, which no market can skip.
 /// @dev A name's token id is its label (a bytes32, left-aligned) as a uint256.
-interface ILARPNames {
+interface IIMDNames {
     event NameRegistered(uint256 indexed tokenId, bytes32 indexed label, address indexed to, uint256 paid);
     event NameLinked(uint256 indexed tokenId, uint256 indexed imdId, address indexed holder, uint256 toll);
     event NameUnlinked(uint256 indexed tokenId, uint256 indexed imdId);
@@ -107,6 +107,6 @@ interface ILARPNames {
 }
 
 /// @notice A name renderer: draws name `tokenId` (`name` = "kek.imd"), linked to identity `imdIdPlusOne - 1` (0: none).
-interface ILARPNameRenderer {
+interface IIMDNameRenderer {
     function render(uint256 tokenId, string calldata full, uint256 imdIdPlusOne) external view returns (string memory);
 }

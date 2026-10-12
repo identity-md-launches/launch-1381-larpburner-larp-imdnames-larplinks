@@ -1,6 +1,6 @@
 # LARP audit (2026-10-12, before the swarm launch)
 
-Scope: `src/` at this commit: `LARPBurner`, `LARP` / `ILARP`, `LARPNames` / `ILARPNames` with `SwarmPrices`,
+Scope: `src/` at this commit: `LARPBurner`, `LARP` / `ILARP`, `IMDNames` / `IIMDNames` with `SwarmPrices`,
 `LARPLinks`, `SafeReads`, `Labels`. Four contracts on Ethereum.
 - No owner, no admin, no upgrades.
 - The one role is the names' **artist**, who can change only the art (tokenURI's renderer) and can lock it forever.
@@ -91,7 +91,7 @@ make the swap eat its 63/64 could skip POOL4 for the backup, or park the fee.
 - **I-07 Views forward all gas to collections the holder chose.** On-chain consumers should cap gas.
 - **I-08 Prices are in ETH.** They change only through the swarm, within the guardrails.
 - **I-09 Hook launches can't be proven.** IMD's v4-hook launcher has no `distributorOf`.
-- **I-10** ETH force-sent to LARP, LARPNames or LARPLinks (no `receive`) stays there; the burner has one and burns it.
+- **I-10** ETH force-sent to LARP, IMDNames or LARPLinks (no `receive`) stays there; the burner has one and burns it.
 
 ## Checked and holding
 
@@ -114,7 +114,7 @@ make the swap eat its 63/64 could skip POOL4 for the backup, or park the fee.
   - Live only while the linker owns both.
   - The toll is due whenever the owner isn't the one who last paid.
   - A broken, gas-hungry or code-less renderer falls back to the card.
-  (`test/LARPNames.t.sol`: 28 tests, including payments in $IMD.)
+  (`test/IMDNames.t.sol`: 28 tests, including payments in $IMD.)
 - **Swarm prices.** All checked in `test/SwarmPrices.t.sol` (15 tests):
   - **Signatures:** IMD's EIP-712 `OracleAttestation`, domain "IdentityMD Oracle" v2, for this contract. The callback
     selector `0x510379c7` matches IMD's docs.

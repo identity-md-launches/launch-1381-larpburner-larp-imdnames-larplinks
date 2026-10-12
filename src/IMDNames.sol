@@ -4,13 +4,13 @@ pragma solidity ^0.8.26;
 import {ERC721} from "solady/tokens/ERC721.sol";
 import {Base64} from "solady/utils/Base64.sol";
 import {ILARP} from "./ILARP.sol";
-import {ILARPNames, ILARPNameRenderer} from "./ILARPNames.sol";
+import {IIMDNames, IIMDNameRenderer} from "./IIMDNames.sol";
 import {LARPBurner} from "./LARPBurner.sol";
 import {SwarmPrices} from "./SwarmPrices.sol";
 import {Labels} from "./Labels.sol";
 import {SafeReads} from "./SafeReads.sol";
 
-/// @title LARP names: name.imd, by the IMD6900 frens
+/// @title IMD Names: name.imd, from the Linked Avatar Registry Protocol, by the IMD6900 frens
 /// @notice ENS-style names for the IMD ecosystem, as ERC-721 NFTs. Paid once, kept forever, traded anywhere. A name
 /// shows on an identity.md its owner holds once linked, while the owner holds both. Every fee buys $IMD and burns it,
 /// through the LARP burner: the registration, the 6.9% royalty on secondary sales, and the toll a new owner pays once
@@ -18,7 +18,7 @@ import {SafeReads} from "./SafeReads.sol";
 /// Prices change only by the IMD swarm's verdict on a proposal anyone can make, and anyone can execute (SwarmPrices).
 /// @dev No owner and no upgrades. The one role, the artist, can only point tokenURI at a new renderer, until it locks
 /// it; a renderer that fails falls back to the built-in one.
-contract LARPNames is ERC721, ILARPNames, SwarmPrices {
+contract IMDNames is ERC721, IIMDNames, SwarmPrices {
     using SafeReads for address;
 
     struct Link {
@@ -26,25 +26,25 @@ contract LARPNames is ERC721, ILARPNames, SwarmPrices {
         uint256 imdIdPlusOne;
     }
 
-    /// @inheritdoc ILARPNames
+    /// @inheritdoc IIMDNames
     string public constant TLD = ".imd";
-    /// @inheritdoc ILARPNames
+    /// @inheritdoc IIMDNames
     uint256 public constant ROYALTY_BPS = 690;
     /// @dev Gas a renderer may use for one tokenURI.
     uint256 internal constant RENDER_GAS = 10_000_000;
 
-    /// @inheritdoc ILARPNames
+    /// @inheritdoc IIMDNames
     address public immutable IDENTITY;
     /// @notice LARP: who controls an identity (its owner or agent).
     ILARP public immutable LARP;
-    /// @inheritdoc ILARPNames
+    /// @inheritdoc IIMDNames
     address public immutable BURNER;
 
-    /// @inheritdoc ILARPNames
+    /// @inheritdoc IIMDNames
     address public artist;
-    /// @inheritdoc ILARPNames
+    /// @inheritdoc IIMDNames
     address public renderer;
-    /// @inheritdoc ILARPNames
+    /// @inheritdoc IIMDNames
     bool public rendererLocked;
 
     /// @dev name => the identity it is linked to and the owner who linked it
@@ -76,7 +76,7 @@ contract LARPNames is ERC721, ILARPNames, SwarmPrices {
 
     // ------------------------------------------------------------------ names
 
-    /// @inheritdoc ILARPNames
+    /// @inheritdoc IIMDNames
     function priceOf(bytes32 label) public view returns (uint256) {
         uint256 n = Labels.length(label);
         if (n == 0) revert BadName();
@@ -85,7 +85,7 @@ contract LARPNames is ERC721, ILARPNames, SwarmPrices {
         return prices.long;
     }
 
-    /// @inheritdoc ILARPNames
+    /// @inheritdoc IIMDNames
     function crewPrice() external view returns (uint256) {
         return prices.crew;
     }
@@ -94,14 +94,14 @@ contract LARPNames is ERC721, ILARPNames, SwarmPrices {
         return LARPBurner(payable(BURNER)).IMD();
     }
 
-    /// @inheritdoc ILARPNames
+    /// @inheritdoc IIMDNames
     function tollOf(uint256 tokenId) public view returns (uint256) {
         address owner = _ownerOf(tokenId);
         if (owner == address(0)) revert NoSuchName();
         return _paidBy[tokenId] == owner ? 0 : priceOf(bytes32(tokenId));
     }
 
-    /// @inheritdoc ILARPNames
+    /// @inheritdoc IIMDNames
     function register(bytes32 label, address to, uint256 minImd) external payable returns (uint256 tokenId) {
         uint256 price;
         (tokenId, price) = _register(label, to);
@@ -109,21 +109,21 @@ contract LARPNames is ERC721, ILARPNames, SwarmPrices {
         LARPBurner(payable(BURNER)).burn{value: price}(minImd);
     }
 
-    /// @inheritdoc ILARPNames
+    /// @inheritdoc IIMDNames
     function registerWithImd(bytes32 label, address to, uint256 maxImd) external returns (uint256 tokenId) {
         uint256 price;
         (tokenId, price) = _register(label, to);
         _payImd(price, maxImd);
     }
 
-    /// @inheritdoc ILARPNames
+    /// @inheritdoc IIMDNames
     function link(uint256 tokenId, uint256 imdId, uint256 minImd) external payable {
         uint256 toll = _link(tokenId, imdId);
         if (msg.value != toll) revert WrongPrice();
         if (toll != 0) LARPBurner(payable(BURNER)).burn{value: toll}(minImd);
     }
 
-    /// @inheritdoc ILARPNames
+    /// @inheritdoc IIMDNames
     function linkWithImd(uint256 tokenId, uint256 imdId, uint256 maxImd) external {
         uint256 toll = _link(tokenId, imdId);
         if (toll != 0) _payImd(toll, maxImd);
@@ -174,7 +174,7 @@ contract LARPNames is ERC721, ILARPNames, SwarmPrices {
         burner.burnImd();
     }
 
-    /// @inheritdoc ILARPNames
+    /// @inheritdoc IIMDNames
     function unlink(uint256 imdId) external {
         uint256 tokenId = _linkedName[imdId];
         if (tokenId == 0) return;
@@ -185,14 +185,14 @@ contract LARPNames is ERC721, ILARPNames, SwarmPrices {
         emit NameUnlinked(tokenId, imdId);
     }
 
-    /// @inheritdoc ILARPNames
+    /// @inheritdoc IIMDNames
     function setPrimary(uint256 imdId) external {
         if (IDENTITY.ownerOf(imdId, gasleft()) != msg.sender) revert NotYourIdentity();
         _primary[msg.sender] = imdId + 1;
         emit PrimarySet(msg.sender, imdId);
     }
 
-    /// @inheritdoc ILARPNames
+    /// @inheritdoc IIMDNames
     function setText(uint256 imdId, string calldata key, string calldata value) external {
         (bool ok, address holder) = LARP.canAct(imdId, msg.sender);
         if (!ok) revert NotYourIdentity();
@@ -202,19 +202,19 @@ contract LARPNames is ERC721, ILARPNames, SwarmPrices {
 
     // ------------------------------------------------------------------ reading
 
-    /// @inheritdoc ILARPNames
+    /// @inheritdoc IIMDNames
     function nameOfToken(uint256 tokenId) public pure returns (string memory) {
         return string.concat(Labels.toString(bytes32(tokenId)), TLD);
     }
 
-    /// @inheritdoc ILARPNames
+    /// @inheritdoc IIMDNames
     function nameOf(uint256 imdId) public view returns (string memory) {
         uint256 tokenId = _linkedName[imdId];
         if (tokenId == 0 || !_live(tokenId, imdId)) return "";
         return nameOfToken(tokenId);
     }
 
-    /// @inheritdoc ILARPNames
+    /// @inheritdoc IIMDNames
     function identityOf(uint256 tokenId) public view returns (uint256 imdId, bool live) {
         uint256 at = _links[tokenId].imdIdPlusOne;
         if (at == 0) return (0, false);
@@ -222,7 +222,7 @@ contract LARPNames is ERC721, ILARPNames, SwarmPrices {
         live = _live(tokenId, imdId);
     }
 
-    /// @inheritdoc ILARPNames
+    /// @inheritdoc IIMDNames
     function resolve(bytes32 label) public view returns (bool exists, address owner, uint256 imdId, bool linked) {
         owner = _ownerOf(uint256(label));
         if (owner == address(0)) return (false, address(0), 0, false);
@@ -230,7 +230,7 @@ contract LARPNames is ERC721, ILARPNames, SwarmPrices {
         (imdId, linked) = identityOf(uint256(label));
     }
 
-    /// @inheritdoc ILARPNames
+    /// @inheritdoc IIMDNames
     function resolveName(string calldata full)
         external
         view
@@ -241,7 +241,7 @@ contract LARPNames is ERC721, ILARPNames, SwarmPrices {
         return resolve(label);
     }
 
-    /// @inheritdoc ILARPNames
+    /// @inheritdoc IIMDNames
     function primaryOf(address wallet) external view returns (uint256 imdId, string memory full, bool live) {
         uint256 at = _primary[wallet];
         if (at == 0) return (0, "", false);
@@ -250,7 +250,7 @@ contract LARPNames is ERC721, ILARPNames, SwarmPrices {
         if (live) full = nameOf(imdId);
     }
 
-    /// @inheritdoc ILARPNames
+    /// @inheritdoc IIMDNames
     function text(uint256 imdId, string calldata key) external view returns (string memory) {
         return _texts[imdId][IDENTITY.ownerOf(imdId, gasleft())][keccak256(bytes(key))];
     }
@@ -266,7 +266,7 @@ contract LARPNames is ERC721, ILARPNames, SwarmPrices {
     // ------------------------------------------------------------------ ERC-721, ERC-2981
 
     function name() public pure override returns (string memory) {
-        return "LARP Names";
+        return "IMD Names";
     }
 
     function symbol() public pure override returns (string memory) {
@@ -281,7 +281,7 @@ contract LARPNames is ERC721, ILARPNames, SwarmPrices {
         uint256 linked = live ? imdId + 1 : 0;
         if (renderer != address(0)) {
             uri = renderer.textCall(
-                abi.encodeCall(ILARPNameRenderer.render, (tokenId, full, linked)),
+                abi.encodeCall(IIMDNameRenderer.render, (tokenId, full, linked)),
                 RENDER_GAS < gasleft() ? RENDER_GAS : gasleft()
             );
             if (bytes(uri).length != 0) return uri;
@@ -295,13 +295,14 @@ contract LARPNames is ERC721, ILARPNames, SwarmPrices {
     }
 
     function supportsInterface(bytes4 interfaceId) public view override returns (bool) {
-        return interfaceId == 0x2a55205a || interfaceId == type(ILARPNames).interfaceId
-            || super.supportsInterface(interfaceId);
+        return
+            interfaceId == 0x2a55205a || interfaceId == type(IIMDNames).interfaceId
+                || super.supportsInterface(interfaceId);
     }
 
     // ------------------------------------------------------------------ the art (the one changeable thing)
 
-    /// @inheritdoc ILARPNames
+    /// @inheritdoc IIMDNames
     function setRenderer(address renderer_) external {
         if (msg.sender != artist) revert NotArtist();
         if (rendererLocked) revert Locked();
@@ -309,14 +310,14 @@ contract LARPNames is ERC721, ILARPNames, SwarmPrices {
         emit RendererSet(renderer_);
     }
 
-    /// @inheritdoc ILARPNames
+    /// @inheritdoc IIMDNames
     function setArtist(address artist_) external {
         if (msg.sender != artist) revert NotArtist();
         artist = artist_;
         emit ArtistSet(artist_);
     }
 
-    /// @inheritdoc ILARPNames
+    /// @inheritdoc IIMDNames
     function lockRenderer() external {
         if (msg.sender != artist) revert NotArtist();
         rendererLocked = true;
@@ -329,7 +330,7 @@ contract LARPNames is ERC721, ILARPNames, SwarmPrices {
         uint256 length = bytes(full).length;
         uint256 size = 860 / (length + 2);
         if (size > 96) size = 96;
-        string memory footer = linked == 0 ? "LARP name" : string.concat("identity.md #", _decimal(linked - 1));
+        string memory footer = linked == 0 ? "IMD name" : string.concat("identity.md #", _decimal(linked - 1));
         string memory svg = string.concat(
             '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 600"><rect width="600" height="600" fill="#0b0f0c"/>',
             '<rect x="24" y="24" width="552" height="552" rx="28" fill="none" stroke="#3ddc84" stroke-width="4"/>',
@@ -344,7 +345,7 @@ contract LARPNames is ERC721, ILARPNames, SwarmPrices {
         string memory json = string.concat(
             '{"name":"',
             full,
-            '","description":"A LARP name: Linked Avatar Registry Protocol, by the IMD6900 frens.","image":"data:image/svg+xml;base64,',
+            '","description":"An IMD name, from the Linked Avatar Registry Protocol, by the IMD6900 frens.","image":"data:image/svg+xml;base64,',
             Base64.encode(bytes(svg)),
             '","attributes":[{"trait_type":"Length","value":',
             _decimal(length - 4),
