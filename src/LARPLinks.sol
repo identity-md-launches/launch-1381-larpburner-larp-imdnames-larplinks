@@ -64,9 +64,6 @@ contract LARPLinks {
         string title;
     }
 
-    /// @notice What founding a crew costs, in ETH: it buys $IMD on POOL4 for IMD's burn.
-    uint256 public constant CREW_PRICE = 0.0069 ether;
-
     /// @notice The identity.md collection.
     address public immutable IDENTITY;
     /// @notice IMD's launcher, whose `distributorOf(launch)` names every swarm airdrop this board accepts.
@@ -199,19 +196,19 @@ contract LARPLinks {
     // ------------------------------------------------------------------ crews
 
     /// @notice Identity `captain` founds a crew named `name` (a label: 1 to 32 of a-z, 0-9 and '-', unique among
-    /// live crews), paying CREW_PRICE, which buys at least `minImd` $IMD on POOL4 for IMD's burn. `open` crews take
+    /// live crews), paying the crew price (NAMES.crewPrice(), set by the swarm), which burns at least `minImd` $IMD. `open` crews take
     /// anyone; closed ones only identities the captain invites.
     function foundCrew(uint256 captain, bytes32 name, bool open, uint256 minImd)
         external
         payable
         returns (uint256 crewId)
     {
-        if (msg.value != CREW_PRICE) revert WrongPrice();
+        if (msg.value != NAMES.crewPrice()) revert WrongPrice();
         crewId = _found(captain, name, open);
         LARPBurner(payable(BURNER)).burn{value: msg.value}(minImd);
     }
 
-    /// @notice `foundCrew`, paid in $IMD: CREW_PRICE's worth at the burner's quote, at most `maxImd`, pulled from the
+    /// @notice `foundCrew`, paid in $IMD: the crew price's worth at the burner's quote, at most `maxImd`, pulled from the
     /// caller (approve this contract first) and burned.
     function foundCrewWithImd(uint256 captain, bytes32 name, bool open, uint256 maxImd)
         external
@@ -219,7 +216,7 @@ contract LARPLinks {
     {
         crewId = _found(captain, name, open);
         LARPBurner burner = LARPBurner(payable(BURNER));
-        uint256 due = burner.quoteImd(CREW_PRICE);
+        uint256 due = burner.quoteImd(NAMES.crewPrice());
         if (due > maxImd) revert TooMuchImd();
         (bool ok, bytes memory r) = burner.IMD().call(abi.encodeWithSelector(0x23b872dd, msg.sender, BURNER, due)); // transferFrom
         if (!ok || (r.length != 0 && !abi.decode(r, (bool)))) revert WrongPrice();

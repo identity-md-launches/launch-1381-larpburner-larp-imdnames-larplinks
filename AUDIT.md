@@ -1,11 +1,11 @@
 # LARP audit (2026-10-12, before the swarm launch)
 
-Scope: `src/` at this commit: `LARPBurner`, `LARP` / `ILARP`, `LARPNames` / `ILARPNames`, `LARPLinks`, `SafeReads`,
-`Labels`. Four contracts on Ethereum.
+Scope: `src/` at this commit: `LARPBurner`, `LARP` / `ILARP`, `LARPNames` / `ILARPNames` with `SwarmPrices`,
+`LARPLinks`, `SafeReads`, `Labels`. Four contracts on Ethereum.
 - No owner, no admin, no upgrades.
 - The one role is the names' **artist**, who can change only the art (tokenURI's renderer) and can lock it forever.
 
-**Result: no critical, high or medium findings.** 127 offline tests, plus 10 on an Ethereum fork. Two low findings fixed, each held by a test that fails without the
+**Result: no critical, high or medium findings.** 142 offline tests, plus 11 on an Ethereum fork. Two low findings fixed, each held by a test that fails without the
 fix. The rest acknowledged and documented.
 
 ## Trust: what LARP depends on, and what happens if it fails
@@ -21,6 +21,7 @@ fix. The rest acknowledged and documented.
 | $IMD (LayerZero OFT, owner `0x047F…`) | IMD's treasury (peers) | $IMD at `0x…dEaD` can never move, whatever the token's owner does |
 | IMD's launcher `distributorOf` | immutable contract; IMD writes the airdrop roots | jeet ranks are only as true as IMD's airdrops; nothing else depends on it |
 | the names' renderer | the artist, until locked | art only; a failing renderer falls back to the built-in card |
+| IMD's oracle (attester `0x5598…2982`, Intake `0xa43e…de82`, owned by IMD's treasury) | IMD | price changes only. A verdict needs its signature, for this contract, on the contract's own proposal; a bad one can move prices at most 2x a week, within 0.00001-1 ETH and short >= long. If IMD stops answering, prices stay. |
 
 **Not used, on purpose:** IMD's BurnExecutor (`0xe293…c750`). Its owner can `rescueToken`, `rescueETH` and redirect
 the burn (`setBaseBurnReceiver`), so $IMD sent there isn't trustlessly burned. LARP sends to `0x…dEaD` instead. The
@@ -52,6 +53,14 @@ make the swap eat its 63/64 could skip POOL4 for the backup, or park the fee.
   - **Why one pool can't be gamed:** moving POOL4 alone (shallow, concentrated) can never lower the price.
   - **Moving both:** this means moving the hookless pool too (~600 ETH deep). Their 1% fees each way make that cost
     about what it saves, even for a batch of names in one transaction.
+- **L-08 Price governance trusts IMD's oracle.**
+  - **What it rests on:** a verdict rests on IMD's attester key and its 9-agent panel (7 must agree).
+  - **What IMD's writer can do:** it can't forge a verdict. It can withhold one, or pair it with the wrong one of this
+    contract's own pending proposals; the guardrails bound both.
+  - **The question hash isn't pinned:** IMD computes it off chain (`oracleQuestionHash`), so the binding is the Intake's
+    request id, as IMD documents for consumers on the asking chain.
+  - **How it was validated:** the contract writes the whole question, and IMD's free quote accepted it (status
+    `quoted`). Proposing costs the proposer 0.5 IMD, which IMD's Intake forwards to IMD's treasury.
 - **I-11 The IMD6900 buy is small and bounded.**
   - **Size:** it is 6.9% of at most 0.1 ETH of $IMD per burn, against the pair pool's 6.9% fee each way, so it isn't
     worth sandwiching.
@@ -80,7 +89,7 @@ make the swap eat its 63/64 could skip POOL4 for the backup, or park the fee.
 - **I-05 Fake collections.** LARP proves what a collection's `ownerOf` / `balanceOf` answers, as ENS avatars do.
 - **I-06 Hybrid tokens** (both `ownerOf` and `balanceOf(account, id)`) can be placed once each way.
 - **I-07 Views forward all gas to collections the holder chose.** On-chain consumers should cap gas.
-- **I-08 Fixed prices,** in ETH, forever.
+- **I-08 Prices are in ETH.** They change only through the swarm, within the guardrails.
 - **I-09 Hook launches can't be proven.** IMD's v4-hook launcher has no `distributorOf`.
 - **I-10** ETH force-sent to LARP, LARPNames or LARPLinks (no `receive`) stays there; the burner has one and burns it.
 
@@ -106,6 +115,14 @@ make the swap eat its 63/64 could skip POOL4 for the backup, or park the fee.
   - The toll is due whenever the owner isn't the one who last paid.
   - A broken, gas-hungry or code-less renderer falls back to the card.
   (`test/LARPNames.t.sol`: 28 tests, including payments in $IMD.)
+- **Swarm prices.** All checked in `test/SwarmPrices.t.sol` (15 tests):
+  - **Signatures:** IMD's EIP-712 `OracleAttestation`, domain "IdentityMD Oracle" v2, for this contract. The callback
+    selector `0x510379c7` matches IMD's docs.
+  - **Refused:** another key, another contract, a tampered signature, a weak panel (under 9, quorum under 7, fewer
+    agreed than the quorum, under 7 in 9), and an expired verdict.
+  - **Callbacks:** only from the Intake, and only for the contract's own proposals.
+  - **Execution:** one change a week, stale after another change, within two weeks of the verdict, once.
+  - **On the fork:** the real Intake path (`test_APriceProposalThroughIMDsRealIntake`).
 - **Merkle proofs** and **placement bookkeeping** as before (`test_AnInnerNodeIsNotALeaf`, three invariants).
 - **Launch constraints.** The constructors call nothing, and no CALLCODE / DELEGATECALL / SELFDESTRUCT appears anywhere.
-  The four contracts take about 6.9M gas together, in one transaction (`test/Launch.t.sol`).
+  The four contracts take about 8.6M gas together, in one transaction (`test/Launch.t.sol`).

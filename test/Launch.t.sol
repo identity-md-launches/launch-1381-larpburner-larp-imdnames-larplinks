@@ -16,6 +16,8 @@ contract LaunchTest is Test {
     address constant POOL4_HOOK = 0xc6C965Bd164c483e87d0B550671798e9A3602840;
     address constant LAUNCHER = 0xfF03410d0Fe5fa8f7F59F743de35E333D9857120;
     address constant ARTIST = 0x35dA9C0303507ddf708E87F2568EdDf12c47a059;
+    address constant INTAKE = 0xa43e6F75ee006411F79Ac1C84120606C2330DE82;
+    address constant ORACLE_SIGNER = 0x5598Aa9146215Bc13eb26f2c692Ad1461Fd32982;
     address constant IMD6900 = 0x0000198C940D8cD70Cb9ACeC5E3af8216ac57d2F;
     address constant PAIR_HOOK = 0x667f4621030aCfAfb1bD0B64d33610A8567f2A44;
 
@@ -38,7 +40,7 @@ contract LaunchTest is Test {
     function _launch() internal returns (LARPBurner burner, LARP larp, LARPNames names, LARPLinks links) {
         burner = new LARPBurner(POOL_MANAGER, IMD, 10_000, 60, POOL4_HOOK, 10_000, 200, IMD6900, 0, 60, PAIR_HOOK);
         larp = new LARP(IDENTITY);
-        names = new LARPNames(IDENTITY, larp, address(burner), ARTIST);
+        names = new LARPNames(IDENTITY, larp, address(burner), ARTIST, INTAKE, ORACLE_SIGNER);
         links = new LARPLinks(IDENTITY, LAUNCHER, larp, names, address(burner));
     }
 
@@ -46,7 +48,7 @@ contract LaunchTest is Test {
         // nothing exists at any of these addresses here: the constructors call nothing
         assertEq(
             IDENTITY.code.length + POOL_MANAGER.code.length + LAUNCHER.code.length + IMD.code.length
-                + IMD6900.code.length,
+                + IMD6900.code.length + INTAKE.code.length,
             0
         );
         (LARPBurner burner, LARP larp, LARPNames names, LARPLinks links) = _launch();
@@ -66,6 +68,10 @@ contract LaunchTest is Test {
         assertEq(address(names.LARP()), address(larp));
         assertEq(names.BURNER(), address(burner));
         assertEq(names.artist(), ARTIST);
+        assertEq(names.INTAKE(), INTAKE);
+        assertEq(names.ORACLE_SIGNER(), ORACLE_SIGNER);
+        assertEq(names.priceOf(bytes32("frens")), 0.00069 ether);
+        assertEq(names.crewPrice(), 0.00069 ether);
         assertEq(links.IDENTITY(), IDENTITY);
         assertEq(links.LAUNCHER(), LAUNCHER);
         assertEq(address(links.LARP()), address(larp));
@@ -92,7 +98,9 @@ contract LaunchTest is Test {
         _scan(bytes.concat(type(LARPBurner).creationCode, _burnerArgs()), "LARPBurner creation code");
         _scan(bytes.concat(type(LARP).creationCode, abi.encode(IDENTITY)), "LARP creation code");
         _scan(
-            bytes.concat(type(LARPNames).creationCode, abi.encode(IDENTITY, larp, burner, ARTIST)),
+            bytes.concat(
+                type(LARPNames).creationCode, abi.encode(IDENTITY, larp, burner, ARTIST, INTAKE, ORACLE_SIGNER)
+            ),
             "LARPNames creation code"
         );
         _scan(

@@ -10,7 +10,7 @@ contract LARPLinksTest is Base {
     event CrewFounded(uint256 indexed crewId, uint256 indexed captain, bytes32 name, bool open);
     event AllocProven(address indexed wallet, uint64 indexed launch, uint256 round, uint256 amount);
 
-    uint256 constant CREW = 0.0069 ether;
+    uint256 constant CREW = 0.00069 ether;
 
     function setUp() public {
         _deploy();

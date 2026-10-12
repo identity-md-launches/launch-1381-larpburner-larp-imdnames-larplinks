@@ -196,7 +196,7 @@ contract LARPAgentsTest is Base {
 
         vm.deal(agent, 1 ether);
         vm.prank(agent);
-        uint256 crewId = links.foundCrew{value: 0.0069 ether}(7, _label("agents"), true, 0);
+        uint256 crewId = links.foundCrew{value: 0.00069 ether}(7, _label("agents"), true, 0);
         vm.prank(agent);
         links.setOpen(crewId, false);
         vm.prank(agent);

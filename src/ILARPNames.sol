@@ -45,8 +45,11 @@ interface ILARPNames {
     /// @notice The burner every fee goes to.
     function BURNER() external view returns (address);
 
-    /// @notice A label's price in ETH: 0.069 for 1 to 3 characters, 0.0169 for 4, 0.0069 for 5 or more.
-    function priceOf(bytes32 label) external pure returns (uint256);
+    /// @notice A label's price in ETH now: by length (1 to 3 characters, 4, 5 or more), as the swarm last set it.
+    /// At launch 0.0069, 0.00169 and 0.00069.
+    function priceOf(bytes32 label) external view returns (uint256);
+    /// @notice What founding a crew costs in ETH now (0.00069 at launch).
+    function crewPrice() external view returns (uint256);
     /// @notice What linking name `tokenId` costs its owner now: 0 if the owner registered it or already paid, else
     /// the name's price.
     function tollOf(uint256 tokenId) external view returns (uint256);

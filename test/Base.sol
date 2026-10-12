@@ -18,6 +18,7 @@ import {LARPNames} from "../src/LARPNames.sol";
 import {ILARPNames} from "../src/ILARPNames.sol";
 import {LARPLinks} from "../src/LARPLinks.sol";
 import {LARPBurner} from "../src/LARPBurner.sol";
+import {Attestation} from "../src/SwarmPrices.sol";
 import {MockNFT} from "./Mocks.sol";
 
 /// @dev An ERC-1155 with the one read LARP makes, a free mint and a transfer.
@@ -105,6 +106,56 @@ contract LiquidityAdder {
     receive() external payable {}
 }
 
+/// @dev IMD's oracle Intake, as far as LARP uses it: takes the $IMD and the ask, and (as IMD's writer) hands the
+/// verdict to the callback.
+contract MockIntake {
+    struct Ask {
+        address payer;
+        bytes body;
+        address target;
+        bytes4 selector;
+        bytes4 onFailure;
+        uint256 amount;
+    }
+
+    address public immutable treasury = address(0x7EA5);
+    uint256 public count;
+    mapping(bytes32 => Ask) public asks;
+    bytes public lastBody;
+
+    function requestWithFailure(
+        bytes32,
+        bytes calldata body,
+        Callback calldata callback,
+        bytes4 onFailure,
+        address asset,
+        uint256 amount
+    ) external returns (bytes32 requestId) {
+        require(amount >= 0.5 ether, "PriceNotMet");
+        MockIMD(asset).transferFrom(msg.sender, treasury, amount);
+        requestId = keccak256(abi.encode("intake", ++count));
+        asks[requestId] = Ask(msg.sender, body, callback.target, callback.selector, onFailure, amount);
+        lastBody = body;
+    }
+
+    struct Callback {
+        address target;
+        bytes4 selector;
+    }
+
+    function deliver(bytes32 requestId, Attestation calldata a, bytes calldata sig) external returns (bool ok) {
+        Ask storage ask = asks[requestId];
+        (ok,) = ask.target.call{gas: 200_000}(abi.encodeWithSelector(ask.selector, requestId, a, sig));
+    }
+
+    function fail(bytes32 requestId, uint8 status, bytes32 reason) external returns (bool ok) {
+        Ask storage ask = asks[requestId];
+        (ok,) = ask.target.call{gas: 200_000}(
+            abi.encodeWithSelector(ask.onFailure, requestId, status, reason, uint16(0), uint16(0), bytes(""))
+        );
+    }
+}
+
 /// @dev IMD's launcher, as far as LARP links reads it.
 contract MockLauncher {
     mapping(uint64 => address) public distributorOf;
@@ -155,6 +206,9 @@ abstract contract Base is Test {
     V4PoolKey pair;
 
     LARPBurner burner;
+    MockIntake intake;
+    uint256 oracleKey = 0x0A11CE0;
+    address oracleSigner;
     LARP larp;
     LARPNames names;
     LARPLinks links;
@@ -188,8 +242,10 @@ abstract contract Base is Test {
         pm.initialize(pair, TickMath.getSqrtPriceAtTick(imdIs0 ? int24(92_100) : int24(-92_100)));
 
         burner = _newBurner(address(pm));
+        intake = new MockIntake();
+        oracleSigner = vm.addr(oracleKey);
         larp = new LARP(address(identity));
-        names = new LARPNames(address(identity), larp, address(burner), artist);
+        names = new LARPNames(address(identity), larp, address(burner), artist, address(intake), oracleSigner);
         links = new LARPLinks(address(identity), address(launcher), larp, names, address(burner));
         imd.mint(address(this), 1e30);
         imd.approve(address(adder), type(uint256).max);

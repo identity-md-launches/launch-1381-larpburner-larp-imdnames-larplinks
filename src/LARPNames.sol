@@ -6,6 +6,7 @@ import {Base64} from "solady/utils/Base64.sol";
 import {ILARP} from "./ILARP.sol";
 import {ILARPNames, ILARPNameRenderer} from "./ILARPNames.sol";
 import {LARPBurner} from "./LARPBurner.sol";
+import {SwarmPrices} from "./SwarmPrices.sol";
 import {Labels} from "./Labels.sol";
 import {SafeReads} from "./SafeReads.sol";
 
@@ -14,9 +15,10 @@ import {SafeReads} from "./SafeReads.sol";
 /// shows on an identity.md its owner holds once linked, while the owner holds both. Every fee buys $IMD and burns it,
 /// through the LARP burner: the registration, the 6.9% royalty on secondary sales, and the toll a new owner pays once
 /// to link the name (so every change of hands burns, whatever the market).
+/// Prices change only by the IMD swarm's verdict on a proposal anyone can make, and anyone can execute (SwarmPrices).
 /// @dev No owner and no upgrades. The one role, the artist, can only point tokenURI at a new renderer, until it locks
 /// it; a renderer that fails falls back to the built-in one.
-contract LARPNames is ERC721, ILARPNames {
+contract LARPNames is ERC721, ILARPNames, SwarmPrices {
     using SafeReads for address;
 
     struct Link {
@@ -60,7 +62,11 @@ contract LARPNames is ERC721, ILARPNames {
     /// @param larp the LARP registry
     /// @param burner the LARP burner
     /// @param artist_ who may change the renderer (until it is locked)
-    constructor(address identity, ILARP larp, address burner, address artist_) {
+    /// @param intake IMD's oracle Intake
+    /// @param oracleSigner IMD's oracle signer
+    constructor(address identity, ILARP larp, address burner, address artist_, address intake, address oracleSigner)
+        SwarmPrices(intake, oracleSigner, Prices(0.0069 ether, 0.00169 ether, 0.00069 ether, 0.00069 ether))
+    {
         if (identity == address(0) || address(larp) == address(0) || burner == address(0)) revert ZeroAddress();
         IDENTITY = identity;
         LARP = larp;
@@ -71,12 +77,21 @@ contract LARPNames is ERC721, ILARPNames {
     // ------------------------------------------------------------------ names
 
     /// @inheritdoc ILARPNames
-    function priceOf(bytes32 label) public pure returns (uint256) {
+    function priceOf(bytes32 label) public view returns (uint256) {
         uint256 n = Labels.length(label);
         if (n == 0) revert BadName();
-        if (n <= 3) return 0.069 ether;
-        if (n == 4) return 0.0169 ether;
-        return 0.0069 ether;
+        if (n <= 3) return prices.short;
+        if (n == 4) return prices.four;
+        return prices.long;
+    }
+
+    /// @inheritdoc ILARPNames
+    function crewPrice() external view returns (uint256) {
+        return prices.crew;
+    }
+
+    function _imd() internal view override returns (address) {
+        return LARPBurner(payable(BURNER)).IMD();
     }
 
     /// @inheritdoc ILARPNames
@@ -338,18 +353,5 @@ contract LARPNames is ERC721, ILARPNames {
             "]}"
         );
         return string.concat("data:application/json;base64,", Base64.encode(bytes(json)));
-    }
-
-    function _decimal(uint256 value) internal pure returns (string memory) {
-        if (value == 0) return "0";
-        uint256 digits;
-        for (uint256 v = value; v != 0; v /= 10) {
-            ++digits;
-        }
-        bytes memory out = new bytes(digits);
-        for (; value != 0; value /= 10) {
-            out[--digits] = bytes1(uint8(48 + value % 10));
-        }
-        return string(out);
     }
 }

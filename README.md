@@ -15,6 +15,7 @@ agent) gets:
 
 Four contracts on Ethereum, deployed by the IMD swarm.
 - No owner, no admin, no upgrades.
+- **Prices are governed by the IMD swarm:** anyone proposes, the swarm judges, anyone executes.
 - The one role, the names' artist, can change only the names' art, and can lock it forever.
 
 | contract | what |
@@ -60,13 +61,14 @@ reverse lookup.
 - **`register(label, to, minImd)`** (ETH) or **`registerWithImd(label, to, maxImd)`** ($IMD, approved first):
   anyone can register any free name and gets an ERC-721.
 
-  | label length | price |
+  | label length | price at launch |
   |---|---|
-  | 1 to 3 | 0.069 ETH |
-  | 4 | 0.0169 ETH |
-  | 5+ | 0.0069 ETH |
+  | 1 to 3 | 0.0069 ETH |
+  | 4 | 0.00169 ETH |
+  | 5+ | 0.00069 ETH |
 
   Paid once, kept forever, burned in full. A label is 1 to 32 of a-z, 0-9 and `-`, not at either end.
+  Prices then follow the swarm (see below).
 - **`link(tokenId, imdId, minImd)`:** shows the name on an identity its owner holds, while the owner holds both. One
   name per identity, one identity per name.
 - **Secondary sales burn twice:**
@@ -80,6 +82,36 @@ reverse lookup.
 - **Art:** `tokenURI` is a built-in on-chain card. The artist can point it at a better renderer (`setRenderer`); one
   that fails falls back to the card. `lockRenderer()` freezes the art forever, and `setArtist(address(0))` renounces
   the role.
+
+## Prices: the swarm judges, anyone executes (SwarmPrices, in LARPNames)
+
+1. **Anyone proposes** new prices with `propose(prices, fee)`, paying IMD's oracle its price (0.5 IMD) through IMD's
+   Intake. The contract writes the question itself: the current and proposed prices, and LARP's pricing guidelines.
+   A proposer chooses numbers, never words.
+2. **A panel of 9 IMD agents judges it.** The guidelines, at the 24-hour median ETH/USD price:
+   - a 5+ letter name and a crew each cost $1 to $5;
+   - 1-3 letter names cost at least 10x, and 4 letter names at least 2x, a 5+ letter name.
+
+   **A verdict counts only if:**
+   - at least 7 of the 9 agents gave the same answer;
+   - IMD's oracle signed it for this contract;
+   - it answers one of the contract's own proposals;
+   - it hasn't expired.
+3. **Anyone executes** an approved proposal with `execute(requestId)`:
+   - at most one change a week;
+   - within two weeks of the verdict;
+   - only while the prices it was made against still stand.
+
+**Guardrails no verdict can cross:**
+- every price stays between 0.00001 and 1 ETH;
+- a price moves at most 2x up or down per change;
+- short names never cost less than long ones.
+
+**Trust:** a verdict rests on IMD's oracle signer and its swarm panel. The guardrails cap the damage of a bad verdict
+to a slow drift. If IMD stops answering, prices just stay where they are.
+
+**Tested:** IMD's own validator accepts the question the contract writes. A proposal went through IMD's real Intake on
+a mainnet fork.
 
 ## The burner (LARPBurner)
 
@@ -103,7 +135,7 @@ anyone. `AUDIT.md` lists every dependency and what happens if each one fails.
 ## Links (LARPLinks)
 
 - **Frens:** `fren(me, them)` asks; the same call from the other side says yes.
-- **Crews:** `foundCrew` costs 0.0069 ETH, burned. A crew can be open or invite-only, has a captain, and each identity
+- **Crews:** `foundCrew` costs the crew price (0.00069 ETH at launch, then the swarm's), burned. A crew can be open or invite-only, has a captain, and each identity
   is in one crew at a time.
 - **The jeet rank:** `proveAlloc` proves a wallet's swarm airdrop with IMD's public Merkle proof. Only distributors
   that IMD's launcher names are accepted. What the wallet claimed and no longer holds is jeeted.
@@ -117,18 +149,18 @@ anyone. `AUDIT.md` lists every dependency and what happens if each one fails.
 |---|---|
 | `LARPBurner` | PoolManager `0x000000000004444c5dc75cB358380D2e3dE08A90`; $IMD `0xD34a99Bc0f67aE1bbd63C660e6d0b0dd03E263B7`; `10000`, `60`, POOL4's hook `0xc6C965Bd164c483e87d0B550671798e9A3602840`; `10000`, `200` (the hookless pool); IMD6900 `0x0000198C940D8cD70Cb9ACeC5E3af8216ac57d2F`, `0`, `60`, the pair hook `0x667f4621030aCfAfb1bD0B64d33610A8567f2A44` |
 | `LARP` | identity.md `0x0000eC93127BAA929E58E97dd0095A2BFb38ec1D` |
-| `LARPNames` | identity.md; `$contract:LARP`; `$contract:LARPBurner`; the artist `0x35dA9C0303507ddf708E87F2568EdDf12c47a059` |
+| `LARPNames` | identity.md; `$contract:LARP`; `$contract:LARPBurner`; the artist `0x35dA9C0303507ddf708E87F2568EdDf12c47a059`; IMD's oracle Intake `0xa43e6F75ee006411F79Ac1C84120606C2330DE82`; IMD's oracle signer `0x5598Aa9146215Bc13eb26f2c692Ad1461Fd32982` |
 | `LARPLinks` | identity.md; IMD's launcher `0xfF03410d0Fe5fa8f7F59F743de35E333D9857120`; `$contract:LARP`; `$contract:LARPNames`; `$contract:LARPBurner` |
 
 - The constructors store addresses and call nothing.
 - No CALLCODE, DELEGATECALL or SELFDESTRUCT anywhere.
-- About 6.9M gas for all four, in one transaction.
+- About 8.6M gas for all four, in one transaction.
 
 ## Tests and audit
 
 ```sh
-forge test --offline                                           # 127 tests: local v4 POOL4, backup and pair pools
-MAINNET_RPC_URL=<rpc> forge test --match-contract MainnetFork  # 10 more on Ethereum: the real pools, proofs, IMD6900
+forge test --offline                                           # 142 tests: local v4 pools, a mock Intake and oracle key
+MAINNET_RPC_URL=<rpc> forge test --match-contract MainnetFork  # 11 more on Ethereum: the real pools, proofs, IMD's Intake
 ```
 
 On the fork:

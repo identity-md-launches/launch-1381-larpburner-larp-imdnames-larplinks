@@ -7,6 +7,7 @@ import {ILARP} from "../src/ILARP.sol";
 import {LARPNames} from "../src/LARPNames.sol";
 import {LARPLinks} from "../src/LARPLinks.sol";
 import {LARPBurner} from "../src/LARPBurner.sol";
+import {SwarmPrices, Attestation} from "../src/SwarmPrices.sol";
 
 interface IERC721Like {
     function ownerOf(uint256) external view returns (address);
@@ -30,6 +31,8 @@ contract MainnetForkTest is Test {
     address constant POOL4_HOOK = 0xc6C965Bd164c483e87d0B550671798e9A3602840;
     address constant DEAD = 0x000000000000000000000000000000000000dEaD;
     address constant ARTIST = 0x35dA9C0303507ddf708E87F2568EdDf12c47a059;
+    address constant INTAKE = 0xa43e6F75ee006411F79Ac1C84120606C2330DE82;
+    address constant ORACLE_SIGNER = 0x5598Aa9146215Bc13eb26f2c692Ad1461Fd32982;
     address constant PAIR_HOOK = 0x667f4621030aCfAfb1bD0B64d33610A8567f2A44;
     address constant LAUNCHER = 0xfF03410d0Fe5fa8f7F59F743de35E333D9857120;
     address constant WORKER_FRENS = 0x6900d042460d6bdbe68CE994F4dE36706797CCd4;
@@ -48,7 +51,7 @@ contract MainnetForkTest is Test {
         vm.createSelectFork(rpc);
         burner = new LARPBurner(POOL_MANAGER, IMD, 10_000, 60, POOL4_HOOK, 10_000, 200, TREASURY, 0, 60, PAIR_HOOK);
         larp = new LARP(IDENTITY);
-        names = new LARPNames(IDENTITY, larp, address(burner), ARTIST);
+        names = new LARPNames(IDENTITY, larp, address(burner), ARTIST, INTAKE, ORACLE_SIGNER);
         links = new LARPLinks(IDENTITY, LAUNCHER, larp, names, address(burner));
     }
 
@@ -93,9 +96,9 @@ contract MainnetForkTest is Test {
         uint256 pairFees = IERC20Like(TREASURY).balanceOf(PAIR_HOOK);
         vm.deal(TREASURY, 1 ether);
         vm.expectEmit(true, false, true, false, address(burner));
-        emit Bought(0.0069 ether, 0, 0); // route 0: POOL4
+        emit Bought(0.00069 ether, 0, 0); // route 0: POOL4
         vm.prank(TREASURY);
-        uint256 id = names.register{value: 0.0069 ether}(_label("imd6900"), TREASURY, 0);
+        uint256 id = names.register{value: 0.00069 ether}(_label("imd6900"), TREASURY, 0);
         uint256 burned = IERC20Like(IMD).balanceOf(DEAD) - before;
         uint256 burned6900 = supply6900 - IERC20Like(TREASURY).totalSupply();
         emit log_named_decimal_uint("IMD bought on POOL4 and sent to 0x..dEaD (93.1%)", burned, 18);
@@ -135,7 +138,7 @@ contract MainnetForkTest is Test {
     /// @dev Paying in real $IMD at the two real pools' quote.
     function test_ANamePaidInRealImd() public forked {
         address payer = address(0x1dd0000000000000000000000000000000001dD0);
-        uint256 due = burner.quoteImd(0.0069 ether);
+        uint256 due = burner.quoteImd(0.00069 ether);
         emit log_named_decimal_uint("a 5+ letter name in IMD now", due, 18);
         deal(IMD, payer, due);
         uint256 supply6900 = IERC20Like(TREASURY).totalSupply();
@@ -152,7 +155,7 @@ contract MainnetForkTest is Test {
         uint256 before = IERC20Like(IMD).balanceOf(DEAD);
         vm.deal(TREASURY, 1 ether);
         vm.prank(TREASURY);
-        links.foundCrew{value: 0.0069 ether}(806, _label("imd6900-frens"), true, 0);
+        links.foundCrew{value: 0.00069 ether}(806, _label("imd6900-frens"), true, 0);
         assertGt(IERC20Like(IMD).balanceOf(DEAD), before);
         assertEq(links.crewOf(806), 1);
     }
@@ -161,17 +164,17 @@ contract MainnetForkTest is Test {
     function test_ANameChangesHandsAndBurns() public forked {
         vm.deal(TREASURY, 1 ether);
         vm.prank(TREASURY);
-        uint256 id = names.register{value: 0.0069 ether}(_label("imd6900"), TREASURY, 0);
+        uint256 id = names.register{value: 0.00069 ether}(_label("imd6900"), TREASURY, 0);
         address buyer = address(0xb0B0000000000000000000000000000000000B0B);
         vm.startPrank(TREASURY);
         names.transferFrom(TREASURY, buyer, id);
         IERC721Like(IDENTITY).transferFrom(TREASURY, buyer, 806);
         vm.stopPrank();
-        assertEq(names.tollOf(id), 0.0069 ether);
+        assertEq(names.tollOf(id), 0.00069 ether);
         uint256 before = IERC20Like(IMD).balanceOf(DEAD);
         vm.deal(buyer, 1 ether);
         vm.prank(buyer);
-        names.link{value: 0.0069 ether}(id, 806, 0);
+        names.link{value: 0.00069 ether}(id, 806, 0);
         assertGt(IERC20Like(IMD).balanceOf(DEAD), before, "the toll was burned");
         assertEq(names.nameOf(806), "imd6900.imd");
     }
@@ -189,6 +192,75 @@ contract MainnetForkTest is Test {
         assertEq(holder, TREASURY);
         assertTrue(live);
         assertTrue(links.asked(806, 1533));
+    }
+
+    /// @dev A price proposal through IMD's real Intake: the oracle is paid, then the verdict (signed here by a stand-in
+    /// for IMD's oracle key, which only IMD holds) is delivered as the Intake delivers it, and anyone executes it.
+    function test_APriceProposalThroughIMDsRealIntake() public forked {
+        uint256 key = 0x5EC0;
+        LARPNames n = new LARPNames(IDENTITY, larp, address(burner), ARTIST, INTAKE, vm.addr(key));
+        address proposer = address(0x9909000000000000000000000000000000009909);
+        address payTo = 0x4e0fA57Bde726079356537E2F34d671E9F41ADbc;
+        deal(IMD, proposer, 1 ether);
+        uint256 paid = IERC20Like(IMD).balanceOf(payTo);
+        vm.startPrank(proposer);
+        IERC20Like(IMD).approve(address(n), 0.5 ether);
+        bytes32 id = n.propose(SwarmPrices.Prices(0.005 ether, 0.0012 ether, 0.0005 ether, 0.0005 ether), 0.5 ether);
+        vm.stopPrank();
+        assertEq(IERC20Like(IMD).balanceOf(payTo) - paid, 0.5 ether, "IMD's oracle was paid through its Intake");
+
+        Attestation memory a = Attestation(
+            bytes32(bytes16(keccak256("uuid"))),
+            1,
+            keccak256("q"),
+            0,
+            abi.encode(true),
+            0,
+            1,
+            2,
+            bytes32(0),
+            bytes32(0),
+            9,
+            7,
+            9,
+            uint64(block.timestamp),
+            uint64(block.timestamp + 1 days)
+        );
+        bytes32 structHash = keccak256(
+            bytes.concat(
+                abi.encode(
+                    keccak256(
+                        "OracleAttestation(bytes32 requestId,uint256 chainId,bytes32 questionHash,uint8 answerType,bytes answer,uint256 figure,uint64 fromBlock,uint64 toBlock,bytes32 blockHash,bytes32 panelJobId,uint16 panelSize,uint16 quorum,uint16 agreed,uint64 issuedAt,uint64 expiresAt)"
+                    ),
+                    a.requestId,
+                    a.chainId,
+                    a.questionHash,
+                    a.answerType,
+                    keccak256(a.answer),
+                    a.figure,
+                    a.fromBlock,
+                    a.toBlock
+                ),
+                abi.encode(a.blockHash, a.panelJobId, a.panelSize, a.quorum, a.agreed, a.issuedAt, a.expiresAt)
+            )
+        );
+        bytes32 domain = keccak256(
+            abi.encode(
+                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+                keccak256("IdentityMD Oracle"),
+                keccak256("2"),
+                uint256(1),
+                address(n)
+            )
+        );
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(key, keccak256(abi.encodePacked("\x19\x01", domain, structHash)));
+        vm.prank(INTAKE);
+        n.onVerdict(id, a, abi.encodePacked(r, s, v));
+
+        vm.prank(address(0xA11));
+        n.execute(id);
+        assertEq(n.priceOf(_label("frens")), 0.0005 ether);
+        assertEq(n.crewPrice(), 0.0005 ether);
     }
 
     /// @dev Proves every allocation in the fixtures with its real proof against the real distributor.
@@ -249,10 +321,10 @@ contract MainnetForkTest is Test {
         _proveAll();
         vm.deal(TREASURY, 1 ether);
         vm.startPrank(TREASURY);
-        uint256 id = names.register{value: 0.0069 ether}(_label("imd6900"), TREASURY, 0);
+        uint256 id = names.register{value: 0.00069 ether}(_label("imd6900"), TREASURY, 0);
         names.link(id, 806, 0);
         larp.setFace(806, WORKER_FRENS, 1);
-        links.foundCrew{value: 0.0069 ether}(806, _label("imd6900-frens"), true, 0);
+        links.foundCrew{value: 0.00069 ether}(806, _label("imd6900-frens"), true, 0);
         links.fren(806, 1533);
         links.fren(1533, 806);
         vm.stopPrank();

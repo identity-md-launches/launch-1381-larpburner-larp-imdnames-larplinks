@@ -65,7 +65,7 @@ contract LARPNamesTest is Base {
     function test_RegisterForSomeoneElse() public {
         vm.deal(alice, 1 ether);
         vm.prank(alice);
-        uint256 id = names.register{value: 0.0069 ether}(_label("a-gift"), bob, 0);
+        uint256 id = names.register{value: 0.00069 ether}(_label("a-gift"), bob, 0);
         assertEq(names.ownerOf(id), bob);
         assertEq(names.tollOf(id), 0, "the receiver of a registration owes no toll");
     }
@@ -74,22 +74,22 @@ contract LARPNamesTest is Base {
         vm.deal(bob, 1 ether);
         vm.startPrank(bob);
         vm.expectRevert(); // solady TokenAlreadyExists
-        names.register{value: 0.0069 ether}(_label("kekmaster"), bob, 0);
+        names.register{value: 0.00069 ether}(_label("kekmaster"), bob, 0);
         vm.expectRevert(ILARPNames.WrongPrice.selector);
-        names.register{value: 0.007 ether}(_label("kekmasters"), bob, 0);
+        names.register{value: 0.0007 ether}(_label("kekmasters"), bob, 0);
         vm.expectRevert(ILARPNames.BadName.selector);
-        names.register{value: 0.0069 ether}(_label("Kek"), bob, 0);
+        names.register{value: 0.00069 ether}(_label("Kek"), bob, 0);
         vm.expectRevert(); // solady TransferToZeroAddress
-        names.register{value: 0.0069 ether}(_label("nobody-here"), address(0), 0);
+        names.register{value: 0.00069 ether}(_label("nobody-here"), address(0), 0);
         vm.stopPrank();
     }
 
     function test_Prices() public view {
-        assertEq(names.priceOf(_label("a")), 0.069 ether);
-        assertEq(names.priceOf(_label("kek")), 0.069 ether);
-        assertEq(names.priceOf(_label("pepe")), 0.0169 ether);
-        assertEq(names.priceOf(_label("frens")), 0.0069 ether);
-        assertEq(names.priceOf(_label("0123456789abcdefghijklmnopqrstuv")), 0.0069 ether);
+        assertEq(names.priceOf(_label("a")), 0.0069 ether);
+        assertEq(names.priceOf(_label("kek")), 0.0069 ether);
+        assertEq(names.priceOf(_label("pepe")), 0.00169 ether);
+        assertEq(names.priceOf(_label("frens")), 0.00069 ether);
+        assertEq(names.priceOf(_label("0123456789abcdefghijklmnopqrstuv")), 0.00069 ether);
     }
 
     function test_BadNames() public {
@@ -112,7 +112,7 @@ contract LARPNamesTest is Base {
         _deploy(); // fresh, with both pools empty
         _register(carol, "patient");
         assertEq(names.ownerOf(uint256(_label("patient"))), carol, "registered all the same");
-        assertEq(address(burner).balance, 0.0069 ether, "the fee waits in the burner for the next burn");
+        assertEq(address(burner).balance, 0.00069 ether, "the fee waits in the burner for the next burn");
     }
 
     // --- paying in $IMD ---
@@ -127,8 +127,8 @@ contract LARPNamesTest is Base {
 
     function test_RegisterWithImd() public {
         _imdPayer(carol);
-        uint256 due = burner.quoteImd(0.0069 ether);
-        assertApproxEqRel(due, 13.8 ether, 0.02e18, "0.0069 ETH at ~2,000 IMD per ETH");
+        uint256 due = burner.quoteImd(0.00069 ether);
+        assertApproxEqRel(due, 1.38 ether, 0.02e18, "0.00069 ETH at ~2,000 IMD per ETH");
         uint256 supply6900 = imd6900.totalSupply();
         uint256 dead = imd.balanceOf(DEAD);
         vm.prank(carol);
@@ -142,7 +142,7 @@ contract LARPNamesTest is Base {
 
     function test_RegisterWithImdRespectsMaxImd() public {
         _imdPayer(carol);
-        uint256 due = burner.quoteImd(0.0069 ether);
+        uint256 due = burner.quoteImd(0.00069 ether);
         vm.prank(carol);
         vm.expectRevert(ILARPNames.TooMuchImd.selector);
         names.registerWithImd(_label("paid-in-imd"), carol, due - 1);
@@ -250,7 +250,7 @@ contract LARPNamesTest is Base {
     function test_ANewOwnerPaysTheTollToLink() public {
         vm.prank(alice);
         names.transferFrom(alice, bob, kek); // a secondary sale, on any market
-        assertEq(names.tollOf(kek), 0.0069 ether);
+        assertEq(names.tollOf(kek), 0.00069 ether);
 
         vm.deal(bob, 1 ether);
         vm.prank(bob);
@@ -259,9 +259,9 @@ contract LARPNamesTest is Base {
 
         uint256 before = imd.balanceOf(DEAD);
         vm.expectEmit(address(names));
-        emit NameLinked(kek, 2, bob, 0.0069 ether);
+        emit NameLinked(kek, 2, bob, 0.00069 ether);
         vm.prank(bob);
-        names.link{value: 0.0069 ether}(kek, 2, 0);
+        names.link{value: 0.00069 ether}(kek, 2, 0);
         assertGt(imd.balanceOf(DEAD), before, "the toll was burned");
         assertEq(names.nameOf(2), "kekmaster.imd");
         assertEq(names.tollOf(kek), 0, "paid once");
@@ -281,14 +281,14 @@ contract LARPNamesTest is Base {
         assertEq(names.tollOf(kek), 0, "back to the owner who paid for it");
         vm.prank(alice);
         names.transferFrom(alice, carol, kek);
-        assertEq(names.tollOf(kek), 0.0069 ether);
+        assertEq(names.tollOf(kek), 0.00069 ether);
     }
 
     function test_ShortNamesHaveShortNameTolls() public {
         uint256 id = _register(alice, "gm");
         vm.prank(alice);
         names.transferFrom(alice, bob, id);
-        assertEq(names.tollOf(id), 0.069 ether);
+        assertEq(names.tollOf(id), 0.0069 ether);
     }
 
     // --- unlinking ---
@@ -322,7 +322,7 @@ contract LARPNamesTest is Base {
     function test_RoyaltiesGoToTheBurner() public view {
         (address receiver, uint256 amount) = names.royaltyInfo(kek, 1 ether);
         assertEq(receiver, address(burner));
-        assertEq(amount, 0.069 ether, "6.9%");
+        assertEq(amount, 0.069 ether, "6.9% of a 1 ETH sale");
         assertTrue(names.supportsInterface(0x2a55205a), "ERC-2981");
         assertTrue(names.supportsInterface(0x80ac58cd), "ERC-721");
         assertTrue(names.supportsInterface(0x5b5e139f), "metadata");
@@ -331,7 +331,7 @@ contract LARPNamesTest is Base {
 
     function test_ARoyaltyPaymentIsBurned() public {
         // a market pays the royalty to the burner; anyone burns it
-        (bool ok,) = address(burner).call{value: 0.069 ether}("");
+        (bool ok,) = address(burner).call{value: 0.0069 ether}("");
         assertTrue(ok);
         uint256 before = imd.balanceOf(DEAD);
         burner.burn(0);

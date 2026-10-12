@@ -1,0 +1,340 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.26;
+
+import {Base} from "./Base.sol";
+import {SwarmPrices, Attestation} from "../src/SwarmPrices.sol";
+
+contract SwarmPricesTest is Base {
+    event PricesChanged(bytes32 indexed requestId, SwarmPrices.Prices prices);
+
+    address proposer = makeAddr("proposer");
+
+    function setUp() public {
+        _deploy();
+        _fillPool4();
+        identity.mint(alice, 0);
+        imd.mint(proposer, 100 ether);
+        vm.prank(proposer);
+        imd.approve(address(names), type(uint256).max);
+    }
+
+    // --- helpers ---
+
+    function _p(uint64 s, uint64 f, uint64 l, uint64 c) internal pure returns (SwarmPrices.Prices memory) {
+        return SwarmPrices.Prices(s, f, l, c);
+    }
+
+    function _now() internal view returns (SwarmPrices.Prices memory p) {
+        (p.short, p.four, p.long, p.crew) = names.prices();
+    }
+
+    function _propose(SwarmPrices.Prices memory next) internal returns (bytes32 id) {
+        vm.prank(proposer);
+        id = names.propose(next, 0.5 ether);
+    }
+
+    /// @dev An attestation as IMD's oracle signs it: EIP-712 "IdentityMD Oracle" v2, for `forContract`.
+    function _attest(
+        bool answer,
+        uint16 panel,
+        uint16 quorum,
+        uint16 agreed,
+        uint64 expiresAt,
+        address forContract,
+        uint256 key
+    ) internal view returns (Attestation memory a, bytes memory sig) {
+        a = Attestation({
+            requestId: bytes32(bytes16(keccak256("oracle uuid"))),
+            chainId: block.chainid,
+            questionHash: keccak256("the question"),
+            answerType: 0,
+            answer: abi.encode(answer),
+            figure: 0,
+            fromBlock: uint64(block.number > 7200 ? block.number - 7200 : 0),
+            toBlock: uint64(block.number),
+            blockHash: blockhash(block.number > 0 ? block.number - 1 : 0),
+            panelJobId: bytes32(bytes16(keccak256("panel job"))),
+            panelSize: panel,
+            quorum: quorum,
+            agreed: agreed,
+            issuedAt: uint64(block.timestamp),
+            expiresAt: expiresAt
+        });
+        bytes32 structHash = keccak256(
+            bytes.concat(
+                abi.encode(
+                    keccak256(
+                        "OracleAttestation(bytes32 requestId,uint256 chainId,bytes32 questionHash,uint8 answerType,bytes answer,uint256 figure,uint64 fromBlock,uint64 toBlock,bytes32 blockHash,bytes32 panelJobId,uint16 panelSize,uint16 quorum,uint16 agreed,uint64 issuedAt,uint64 expiresAt)"
+                    ),
+                    a.requestId,
+                    a.chainId,
+                    a.questionHash,
+                    a.answerType,
+                    keccak256(a.answer),
+                    a.figure,
+                    a.fromBlock,
+                    a.toBlock
+                ),
+                abi.encode(a.blockHash, a.panelJobId, a.panelSize, a.quorum, a.agreed, a.issuedAt, a.expiresAt)
+            )
+        );
+        bytes32 domain = keccak256(
+            abi.encode(
+                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+                keccak256("IdentityMD Oracle"),
+                keccak256("2"),
+                block.chainid,
+                forContract
+            )
+        );
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(key, keccak256(abi.encodePacked("\x19\x01", domain, structHash)));
+        sig = abi.encodePacked(r, s, v);
+    }
+
+    function _yes() internal view returns (Attestation memory a, bytes memory sig) {
+        return _attest(true, 9, 7, 9, uint64(block.timestamp + 1 days), address(names), oracleKey);
+    }
+
+    function _deliver(bytes32 id, Attestation memory a, bytes memory sig) internal returns (bool) {
+        return intake.deliver(id, a, sig);
+    }
+
+    function _status(bytes32 id) internal view returns (SwarmPrices.Status) {
+        return names.proposal(id).status;
+    }
+
+    // --- the start ---
+
+    function test_StartPrices() public view {
+        SwarmPrices.Prices memory p = _now();
+        assertEq(p.short, 0.0069 ether);
+        assertEq(p.four, 0.00169 ether);
+        assertEq(p.long, 0.00069 ether);
+        assertEq(p.crew, 0.00069 ether);
+        assertEq(names.priceOf(_label("kek")), 0.0069 ether);
+        assertEq(names.priceOf(_label("pepe")), 0.00169 ether);
+        assertEq(names.priceOf(_label("frens")), 0.00069 ether);
+        assertEq(names.crewPrice(), 0.00069 ether);
+    }
+
+    // --- proposing: permissionless, paid to IMD's oracle, the question written by the contract ---
+
+    function test_AnyoneProposesAndTheContractWritesTheQuestion() public {
+        bytes32 id = _propose(_p(0.005 ether, 0.0012 ether, 0.0005 ether, 0.0005 ether));
+        assertEq(imd.balanceOf(intake.treasury()), 0.5 ether, "IMD's oracle was paid");
+        assertEq(imd.balanceOf(address(names)), 0, "nothing stays");
+        assertEq(uint8(_status(id)), uint8(SwarmPrices.Status.Pending));
+
+        string memory body = string(intake.lastBody());
+        string memory question = vm.parseJsonString(body, ".question");
+        assertTrue(
+            _contains(
+                question,
+                "Current prices in ETH: 1-3 letter names 0.0069, 4 letter names 0.00169, 5+ letter names 0.00069, crews 0.00069."
+            )
+        );
+        assertTrue(
+            _contains(
+                question,
+                "Proposed prices in ETH: 1-3 letter names 0.005, 4 letter names 0.0012, 5+ letter names 0.0005, crews 0.0005."
+            )
+        );
+        assertTrue(_contains(question, "LARP price proposal #1 "));
+        assertEq(vm.parseJsonString(body, ".answerType"), "bool");
+        assertEq(vm.parseJsonString(body, ".evidence"), "panel");
+        assertEq(vm.parseJsonUint(body, ".panelSize"), 9);
+        assertEq(vm.parseJsonUint(body, ".quorum"), 7);
+        assertEq(vm.parseJsonUint(body, ".chainId"), block.chainid);
+        assertTrue(
+            _contains(
+                question, "a 5+ letter name costs between 1 and 5 US dollars, a crew costs between 1 and 5 US dollars"
+            )
+        );
+        assertTrue(_contains(vm.parseJsonString(body, ".definitions.guidelines"), "1 to 5 US dollars"));
+        assertTrue(vm.parseJsonBool(body, ".allowAmbiguous"));
+    }
+
+    function test_Guardrails() public {
+        SwarmPrices.Prices[7] memory bad = [
+            _p(0.0069 ether, 0.00169 ether, 0.000009 ether, 0.00069 ether), // under MIN_PRICE (and > 2x down)
+            _p(0.0139 ether, 0.00169 ether, 0.00069 ether, 0.00069 ether), // more than 2x up
+            _p(0.0069 ether, 0.00169 ether, 0.00034 ether, 0.00069 ether), // more than 2x down
+            _p(0.0069 ether, 0.00169 ether, 0.00069 ether, 0.0014 ether), // the crew, more than 2x up
+            _p(0.0016 ether, 0.00169 ether, 0.00069 ether, 0.00069 ether), // short names under 4 letter names (and > 2x)
+            _p(0.0069 ether, 0.001 ether, 0.0013 ether, 0.00069 ether), // 4 letter names under 5+ letter names
+            _p(0.0069 ether, 0.0069 ether, 0.0069 ether, 0.00069 ether) // 5+ letters 10x up
+        ];
+        for (uint256 i; i < bad.length; ++i) {
+            vm.prank(proposer);
+            vm.expectRevert(SwarmPrices.OutOfBounds.selector);
+            names.propose(bad[i], 0.5 ether);
+        }
+    }
+
+    function test_TheOracleMustBePaid() public {
+        SwarmPrices.Prices memory same = _now();
+        vm.prank(proposer);
+        vm.expectRevert(); // the Intake's PriceNotMet
+        names.propose(same, 0.4 ether);
+    }
+
+    // --- the verdict ---
+
+    function test_ApprovedThenAnyoneExecutes() public {
+        SwarmPrices.Prices memory next = _p(0.005 ether, 0.0012 ether, 0.0005 ether, 0.0005 ether);
+        bytes32 id = _propose(next);
+        (Attestation memory a, bytes memory sig) = _yes();
+        assertTrue(_deliver(id, a, sig), "the callback fits the Intake's 200,000 gas");
+        assertEq(uint8(_status(id)), uint8(SwarmPrices.Status.Approved));
+
+        vm.expectEmit(address(names));
+        emit PricesChanged(id, next);
+        vm.prank(makeAddr("anyone"));
+        names.execute(id);
+
+        assertEq(names.priceOf(_label("frens")), 0.0005 ether);
+        assertEq(names.priceOf(_label("kek")), 0.005 ether);
+        assertEq(names.crewPrice(), 0.0005 ether);
+        assertEq(names.epoch(), 1);
+        assertEq(uint8(_status(id)), uint8(SwarmPrices.Status.Executed));
+
+        // and the new prices are what names and crews cost
+        vm.deal(carol, 1 ether);
+        vm.prank(carol);
+        names.register{value: 0.0005 ether}(_label("cheaper"), carol, 0);
+        vm.deal(alice, 1 ether);
+        vm.prank(alice);
+        links.foundCrew{value: 0.0005 ether}(0, _label("cheap-crew"), true, 0);
+    }
+
+    function test_ARejectedProposalChangesNothing() public {
+        bytes32 id = _propose(_p(0.005 ether, 0.0012 ether, 0.0005 ether, 0.0005 ether));
+        (Attestation memory a, bytes memory sig) =
+            _attest(false, 9, 7, 9, uint64(block.timestamp + 1 days), address(names), oracleKey);
+        _deliver(id, a, sig);
+        assertEq(uint8(_status(id)), uint8(SwarmPrices.Status.Rejected));
+        vm.expectRevert(SwarmPrices.NotApproved.selector);
+        names.execute(id);
+        assertEq(names.priceOf(_label("frens")), 0.00069 ether);
+    }
+
+    function test_AWeakPanelIsARejection() public {
+        uint16[4][4] memory weak = [
+            [uint16(8), 7, 8, 0], // a panel under 9
+            [uint16(9), 6, 9, 0], // a quorum under 7
+            [uint16(9), 7, 6, 0], // fewer agreed than the quorum
+            [uint16(10), 7, 10, 0] // 7 of 10 is under 7 in 9
+        ];
+        for (uint256 i; i < weak.length; ++i) {
+            bytes32 id = _propose(_p(0.005 ether, 0.0012 ether, 0.0005 ether, 0.0005 ether));
+            (Attestation memory a, bytes memory sig) = _attest(
+                true, weak[i][0], weak[i][1], weak[i][2], uint64(block.timestamp + 1 days), address(names), oracleKey
+            );
+            _deliver(id, a, sig);
+            assertEq(uint8(_status(id)), uint8(SwarmPrices.Status.Rejected));
+        }
+    }
+
+    function test_AnExpiredVerdictIsARejection() public {
+        bytes32 id = _propose(_p(0.005 ether, 0.0012 ether, 0.0005 ether, 0.0005 ether));
+        (Attestation memory a, bytes memory sig) =
+            _attest(true, 9, 7, 9, uint64(block.timestamp - 1), address(names), oracleKey);
+        _deliver(id, a, sig);
+        assertEq(uint8(_status(id)), uint8(SwarmPrices.Status.Rejected));
+    }
+
+    function test_OnlyTheOraclesSignatureForThisContractCounts() public {
+        bytes32 id = _propose(_p(0.005 ether, 0.0012 ether, 0.0005 ether, 0.0005 ether));
+        (Attestation memory a, bytes memory sig) =
+            _attest(true, 9, 7, 9, uint64(block.timestamp + 1 days), address(names), 0xBAD);
+        assertFalse(_deliver(id, a, sig), "another key: refused");
+        (a, sig) = _attest(true, 9, 7, 9, uint64(block.timestamp + 1 days), address(links), oracleKey);
+        assertFalse(_deliver(id, a, sig), "signed for another contract: refused");
+        (a, sig) = _yes();
+        sig[64] = sig[64] == bytes1(uint8(27)) ? bytes1(uint8(28)) : bytes1(uint8(27));
+        assertFalse(_deliver(id, a, sig), "a tampered signature: refused");
+        assertEq(uint8(_status(id)), uint8(SwarmPrices.Status.Pending), "still waiting for a real verdict");
+        (a, sig) = _yes();
+        assertTrue(_deliver(id, a, sig));
+    }
+
+    function test_OnlyTheIntakeDeliversAndOnlyForItsOwnProposals() public {
+        bytes32 id = _propose(_p(0.005 ether, 0.0012 ether, 0.0005 ether, 0.0005 ether));
+        (Attestation memory a, bytes memory sig) = _yes();
+        vm.expectRevert(SwarmPrices.NotIntake.selector);
+        names.onVerdict(id, a, sig);
+        vm.expectRevert(SwarmPrices.NotIntake.selector);
+        names.onNoVerdict(id, 2, bytes32("disagreed"), 0, 0, "");
+        // an answer to someone else's question, named at this contract: no proposal of ours
+        vm.prank(address(intake));
+        vm.expectRevert(SwarmPrices.NotPending.selector);
+        names.onVerdict(keccak256("someone else's ask"), a, sig);
+    }
+
+    function test_NoVerdictClosesTheProposal() public {
+        bytes32 id = _propose(_p(0.005 ether, 0.0012 ether, 0.0005 ether, 0.0005 ether));
+        assertTrue(intake.fail(id, 2, bytes32("disagreed")));
+        assertEq(uint8(_status(id)), uint8(SwarmPrices.Status.Failed));
+        (Attestation memory a, bytes memory sig) = _yes();
+        assertFalse(_deliver(id, a, sig), "a closed proposal takes no verdict");
+    }
+
+    // --- executing ---
+
+    function _approved(SwarmPrices.Prices memory next) internal returns (bytes32 id) {
+        id = _propose(next);
+        (Attestation memory a, bytes memory sig) = _yes();
+        _deliver(id, a, sig);
+    }
+
+    function test_OneChangeAWeek() public {
+        bytes32 first = _approved(_p(0.005 ether, 0.0012 ether, 0.0005 ether, 0.0005 ether));
+        names.execute(first);
+        bytes32 second = _approved(_p(0.004 ether, 0.001 ether, 0.0004 ether, 0.0004 ether));
+        vm.expectRevert(SwarmPrices.Cooling.selector);
+        names.execute(second);
+        vm.warp(block.timestamp + 7 days);
+        names.execute(second);
+        assertEq(names.priceOf(_label("frens")), 0.0004 ether);
+    }
+
+    function test_AProposalForOldPricesGoesStale() public {
+        bytes32 a = _approved(_p(0.005 ether, 0.0012 ether, 0.0005 ether, 0.0005 ether));
+        bytes32 b = _approved(_p(0.008 ether, 0.002 ether, 0.0008 ether, 0.0008 ether));
+        names.execute(a);
+        vm.warp(block.timestamp + 7 days);
+        vm.expectRevert(SwarmPrices.Stale.selector);
+        names.execute(b);
+    }
+
+    function test_AVerdictMustBeUsedWithinTwoWeeks() public {
+        bytes32 id = _approved(_p(0.005 ether, 0.0012 ether, 0.0005 ether, 0.0005 ether));
+        vm.warp(block.timestamp + 14 days + 1);
+        vm.expectRevert(SwarmPrices.NotApproved.selector);
+        names.execute(id);
+    }
+
+    function test_ExecutedOnce() public {
+        bytes32 id = _approved(_p(0.005 ether, 0.0012 ether, 0.0005 ether, 0.0005 ether));
+        names.execute(id);
+        vm.expectRevert(SwarmPrices.NotApproved.selector);
+        names.execute(id);
+    }
+
+    function _contains(string memory hay, string memory needle) internal pure returns (bool) {
+        bytes memory h = bytes(hay);
+        bytes memory n = bytes(needle);
+        if (n.length > h.length) return false;
+        for (uint256 i; i <= h.length - n.length; ++i) {
+            bool m = true;
+            for (uint256 j; j < n.length; ++j) {
+                if (h[i + j] != n[j]) {
+                    m = false;
+                    break;
+                }
+            }
+            if (m) return true;
+        }
+        return false;
+    }
+}
