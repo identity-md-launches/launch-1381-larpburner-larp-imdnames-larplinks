@@ -2,18 +2,18 @@
 pragma solidity ^0.8.26;
 
 import {Test} from "forge-std/Test.sol";
-import {IMDFace} from "../src/IMDFace.sol";
-import {IIMDFace} from "../src/IIMDFace.sol";
+import {LARP} from "../src/LARP.sol";
+import {ILARP} from "../src/ILARP.sol";
 import {MockNFT, RevertingNFT, DirtyNFT, ShortNFT, RawURINFT} from "./Mocks.sol";
 
-contract IMDFaceTest is Test {
+contract LARPFaceTest is Test {
     event FaceSet(uint256 indexed imdId, address indexed holder, address indexed collection, uint256 tokenId);
     event FaceCleared(uint256 indexed imdId, address indexed holder);
 
     MockNFT identity;
     MockNFT masks;
     MockNFT otherMasks;
-    IMDFace face;
+    LARP face;
 
     address alice = makeAddr("alice");
     address bob = makeAddr("bob");
@@ -22,7 +22,7 @@ contract IMDFaceTest is Test {
         identity = new MockNFT("identity://");
         masks = new MockNFT("mask://");
         otherMasks = new MockNFT("other://");
-        face = new IMDFace(address(identity));
+        face = new LARP(address(identity));
         identity.mint(alice, 0);
         identity.mint(alice, 1);
         identity.mint(bob, 2);
@@ -49,7 +49,7 @@ contract IMDFaceTest is Test {
         assertEq(collection, address(masks));
         assertEq(tokenId, 7);
         assertTrue(live);
-        (uint256 imdId, bool worn) = face.wearerOf(address(masks), 7);
+        (uint256 imdId,, bool worn) = face.wearerOf(address(masks), 7);
         assertEq(imdId, 0, "identity #0 wears it");
         assertTrue(worn);
         assertEq(face.faceURI(0), "mask://7");
@@ -60,25 +60,25 @@ contract IMDFaceTest is Test {
 
     function test_RefusesAnIdentityThatIsNotYours() public {
         vm.prank(alice);
-        vm.expectRevert(IIMDFace.NotYourIdentity.selector);
+        vm.expectRevert(ILARP.NotYourIdentity.selector);
         face.setFace(2, address(masks), 7);
     }
 
     function test_RefusesAnIdentityThatDoesNotExist() public {
         vm.prank(alice);
-        vm.expectRevert(IIMDFace.NotYourIdentity.selector);
+        vm.expectRevert(ILARP.NotYourIdentity.selector);
         face.setFace(5, address(masks), 7);
     }
 
     function test_RefusesAMaskThatIsNotYours() public {
         vm.prank(alice);
-        vm.expectRevert(IIMDFace.NotYourMask.selector);
+        vm.expectRevert(ILARP.NotYours.selector);
         face.setFace(0, address(masks), 9);
     }
 
     function test_RefusesAnIdentityAsAMask() public {
         vm.prank(alice);
-        vm.expectRevert(IIMDFace.NotAMask.selector);
+        vm.expectRevert(ILARP.NotAMask.selector);
         face.setFace(0, address(identity), 1);
     }
 
@@ -90,14 +90,14 @@ contract IMDFaceTest is Test {
         address[5] memory bad = [eoa, address(0), reverting, dirty, short];
         for (uint256 i; i < bad.length; ++i) {
             vm.prank(alice);
-            vm.expectRevert(IIMDFace.NotYourMask.selector);
+            vm.expectRevert(ILARP.NotYours.selector);
             face.setFace(0, bad[i], 1);
         }
     }
 
     function test_ZeroIdentityRefused() public {
-        vm.expectRevert(IMDFace.ZeroIdentity.selector);
-        new IMDFace(address(0));
+        vm.expectRevert(LARP.ZeroIdentity.selector);
+        new LARP(address(0));
     }
 
     // --- a face is live only while its holder holds both ---
@@ -108,7 +108,7 @@ contract IMDFaceTest is Test {
         vm.prank(alice);
         identity.transferFrom(alice, bob, 0);
         assertFalse(_live(0));
-        (, bool worn) = face.wearerOf(address(masks), 7);
+        (,, bool worn) = face.wearerOf(address(masks), 7);
         assertFalse(worn);
         assertEq(face.faceURI(0), "identity://0", "the identity's own art");
         assertEq(face.avatarOf(0), "");
@@ -167,7 +167,7 @@ contract IMDFaceTest is Test {
         assertEq(holder, address(0), "identity #0 has no face");
         assertFalse(live);
         assertTrue(_live(1));
-        (uint256 imdId, bool worn) = face.wearerOf(address(masks), 7);
+        (uint256 imdId,, bool worn) = face.wearerOf(address(masks), 7);
         assertEq(imdId, 1);
         assertTrue(worn);
     }
@@ -194,10 +194,10 @@ contract IMDFaceTest is Test {
         vm.prank(alice);
         face.setFace(0, address(otherMasks), 0);
 
-        (uint256 imdId, bool worn) = face.wearerOf(address(masks), 7);
+        (uint256 imdId,, bool worn) = face.wearerOf(address(masks), 7);
         assertEq(imdId, 0);
         assertFalse(worn, "mask #7 is free");
-        (imdId, worn) = face.wearerOf(address(otherMasks), 0);
+        (imdId,, worn) = face.wearerOf(address(otherMasks), 0);
         assertEq(imdId, 0);
         assertTrue(worn);
         assertEq(face.faceURI(0), "other://0");
@@ -209,7 +209,7 @@ contract IMDFaceTest is Test {
         vm.prank(alice);
         face.setFace(0, address(masks), 7);
         assertTrue(_live(0));
-        (uint256 imdId, bool worn) = face.wearerOf(address(masks), 7);
+        (uint256 imdId,, bool worn) = face.wearerOf(address(masks), 7);
         assertEq(imdId, 0);
         assertTrue(worn);
     }
@@ -228,7 +228,7 @@ contract IMDFaceTest is Test {
         assertEq(collection, address(0));
         assertEq(tokenId, 0);
         assertFalse(live);
-        (, bool worn) = face.wearerOf(address(masks), 7);
+        (,, bool worn) = face.wearerOf(address(masks), 7);
         assertFalse(worn);
     }
 
@@ -236,7 +236,7 @@ contract IMDFaceTest is Test {
         vm.prank(alice);
         face.setFace(0, address(masks), 7);
         vm.prank(bob);
-        vm.expectRevert(IIMDFace.NotYourIdentity.selector);
+        vm.expectRevert(ILARP.NotYourPlacement.selector);
         face.clearFace(0);
     }
 
@@ -298,13 +298,13 @@ contract IMDFaceTest is Test {
     }
 
     function test_WearerOfAnUnwornMask() public view {
-        (uint256 imdId, bool live) = face.wearerOf(address(masks), 9);
+        (uint256 imdId,, bool live) = face.wearerOf(address(masks), 9);
         assertEq(imdId, 0);
         assertFalse(live);
     }
 
     function test_SupportsInterface() public view {
-        assertTrue(face.supportsInterface(type(IIMDFace).interfaceId));
+        assertTrue(face.supportsInterface(type(ILARP).interfaceId));
         assertTrue(face.supportsInterface(0x01ffc9a7));
         assertFalse(face.supportsInterface(0xffffffff));
         assertFalse(face.supportsInterface(0x80ac58cd), "not an NFT itself");
