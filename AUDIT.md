@@ -5,7 +5,7 @@ Scope: `src/` at this commit: `LARPBurner`, `LARP` / `ILARP`, `LARPNames` / `ILA
 - No owner, no admin, no upgrades.
 - The one role is the names' **artist**, who can change only the art (tokenURI's renderer) and can lock it forever.
 
-**Result: no critical, high or medium findings.** Two low findings fixed, each held by a test that fails without the
+**Result: no critical, high or medium findings.** 127 offline tests, plus 10 on an Ethereum fork. Two low findings fixed, each held by a test that fails without the
 fix. The rest acknowledged and documented.
 
 ## Trust: what LARP depends on, and what happens if it fails
@@ -34,8 +34,10 @@ Each route's swap runs in a try. A swap that runs out of gas inside it keeps 1/6
 make the swap eat its 63/64 could skip POOL4 for the backup, or park the fee.
 
 **Fix:** a route that fails with no more than 1/63 of its gas left reverts the call (`TooLittleGas`).
-**Tests:** `test_ASwapOutOfGasReverts` (a PoolManager that burns all gas) and `test_NoGasLimitSkipsPool4`
-(gas limits 40k-400k: the backup pool's price never moves while POOL4 can take the trade).
+**Tests:**
+- `test_ASwapOutOfGasReverts` (a PoolManager that burns all gas) fails without the fix.
+- `test_NoGasLimitSkipsARoute` sweeps gas limits from 100k to 1.5M: the backup pool's price never moves while POOL4
+  can take the trade, and no call that goes through skips the IMD6900 buy.
 
 ### L-02 The jeet board's reads grow without bound (LARPLinks)
 
@@ -103,7 +105,7 @@ make the swap eat its 63/64 could skip POOL4 for the backup, or park the fee.
   - Live only while the linker owns both.
   - The toll is due whenever the owner isn't the one who last paid.
   - A broken, gas-hungry or code-less renderer falls back to the card.
-  (`test/LARPNames.t.sol`: 24 tests.)
+  (`test/LARPNames.t.sol`: 28 tests, including payments in $IMD.)
 - **Merkle proofs** and **placement bookkeeping** as before (`test_AnInnerNodeIsNotALeaf`, three invariants).
 - **Launch constraints.** The constructors call nothing, and no CALLCODE / DELEGATECALL / SELFDESTRUCT appears anywhere.
   The four contracts take about 6.9M gas together, in one transaction (`test/Launch.t.sol`).
