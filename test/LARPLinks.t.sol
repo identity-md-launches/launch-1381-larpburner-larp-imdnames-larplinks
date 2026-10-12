@@ -130,6 +130,24 @@ contract LARPLinksTest is Base {
         assertEq(links.crewByName(_label("kek-crew")), 1);
     }
 
+    function test_FoundACrewWithImd() public {
+        _fillBackup();
+        _fillPair();
+        imd.mint(alice, 1_000 ether);
+        vm.prank(alice);
+        imd.approve(address(links), type(uint256).max);
+        uint256 due = burner.quoteImd(CREW);
+        uint256 dead = imd.balanceOf(DEAD);
+        vm.prank(alice);
+        vm.expectRevert(LARPLinks.TooMuchImd.selector);
+        links.foundCrewWithImd(0, _label("imd-crew"), true, due - 1);
+        vm.prank(alice);
+        uint256 id = links.foundCrewWithImd(0, _label("imd-crew"), true, due);
+        assertEq(links.crewOf(0), id);
+        assertEq(imd.balanceOf(alice), 1_000 ether - due);
+        assertEq(imd.balanceOf(DEAD) - dead, due - due * 690 / 10_000);
+    }
+
     function test_CrewFoundingRules() public {
         vm.startPrank(alice);
         vm.expectRevert(LARPLinks.WrongPrice.selector);

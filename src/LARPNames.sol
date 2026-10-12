@@ -88,24 +88,48 @@ contract LARPNames is ERC721, ILARPNames {
 
     /// @inheritdoc ILARPNames
     function register(bytes32 label, address to, uint256 minImd) external payable returns (uint256 tokenId) {
-        uint256 price = priceOf(label);
+        uint256 price;
+        (tokenId, price) = _register(label, to);
         if (msg.value != price) revert WrongPrice();
-        tokenId = uint256(label);
-        _mint(to, tokenId); // reverts for a taken name or address(0)
-        _paidBy[tokenId] = to;
-        emit NameRegistered(tokenId, label, to, price);
         LARPBurner(payable(BURNER)).burn{value: price}(minImd);
     }
 
     /// @inheritdoc ILARPNames
+    function registerWithImd(bytes32 label, address to, uint256 maxImd) external returns (uint256 tokenId) {
+        uint256 price;
+        (tokenId, price) = _register(label, to);
+        _payImd(price, maxImd);
+    }
+
+    /// @inheritdoc ILARPNames
     function link(uint256 tokenId, uint256 imdId, uint256 minImd) external payable {
+        uint256 toll = _link(tokenId, imdId);
+        if (msg.value != toll) revert WrongPrice();
+        if (toll != 0) LARPBurner(payable(BURNER)).burn{value: toll}(minImd);
+    }
+
+    /// @inheritdoc ILARPNames
+    function linkWithImd(uint256 tokenId, uint256 imdId, uint256 maxImd) external {
+        uint256 toll = _link(tokenId, imdId);
+        if (toll != 0) _payImd(toll, maxImd);
+    }
+
+    function _register(bytes32 label, address to) internal returns (uint256 tokenId, uint256 price) {
+        price = priceOf(label);
+        tokenId = uint256(label);
+        _mint(to, tokenId); // reverts for a taken name or address(0)
+        _paidBy[tokenId] = to;
+        emit NameRegistered(tokenId, label, to, price);
+    }
+
+    /// @dev Links, and returns the toll due (in ETH): the name's price if its owner isn't the one who last paid.
+    function _link(uint256 tokenId, uint256 imdId) internal returns (uint256 toll) {
         address owner = _ownerOf(tokenId);
         if (owner == address(0)) revert NoSuchName();
         (bool ok, address holder) = LARP.canAct(imdId, msg.sender);
         if (!ok) revert NotYourIdentity();
         if (owner != holder) revert NotYourName();
-        uint256 toll = _paidBy[tokenId] == holder ? 0 : priceOf(bytes32(tokenId));
-        if (msg.value != toll) revert WrongPrice();
+        toll = _paidBy[tokenId] == holder ? 0 : priceOf(bytes32(tokenId));
 
         // the identity's old name and the name's old identity come apart
         uint256 old = _linkedName[imdId];
@@ -121,10 +145,18 @@ contract LARPNames is ERC721, ILARPNames {
         _links[tokenId] = Link(holder, imdId + 1);
         _linkedName[imdId] = tokenId;
         emit NameLinked(tokenId, imdId, holder, toll);
-        if (toll != 0) {
-            _paidBy[tokenId] = holder;
-            LARPBurner(payable(BURNER)).burn{value: toll}(minImd);
-        }
+        if (toll != 0) _paidBy[tokenId] = holder;
+    }
+
+    /// @dev Pulls `eth`'s worth of $IMD (the burner's quote, at most `maxImd`) from the caller to the burner, which
+    /// burns it.
+    function _payImd(uint256 eth, uint256 maxImd) internal {
+        LARPBurner burner = LARPBurner(payable(BURNER));
+        uint256 due = burner.quoteImd(eth);
+        if (due > maxImd) revert TooMuchImd();
+        (bool ok, bytes memory r) = burner.IMD().call(abi.encodeWithSelector(0x23b872dd, msg.sender, BURNER, due)); // transferFrom
+        if (!ok || (r.length != 0 && !abi.decode(r, (bool)))) revert WrongPrice();
+        burner.burnImd();
     }
 
     /// @inheritdoc ILARPNames

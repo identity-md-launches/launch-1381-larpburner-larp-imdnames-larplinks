@@ -115,6 +115,64 @@ contract LARPNamesTest is Base {
         assertEq(address(burner).balance, 0.0069 ether, "the fee waits in the burner for the next burn");
     }
 
+    // --- paying in $IMD ---
+
+    function _imdPayer(address who) internal {
+        _fillBackup();
+        _fillPair();
+        imd.mint(who, 1_000 ether);
+        vm.prank(who);
+        imd.approve(address(names), type(uint256).max);
+    }
+
+    function test_RegisterWithImd() public {
+        _imdPayer(carol);
+        uint256 due = burner.quoteImd(0.0069 ether);
+        assertApproxEqRel(due, 13.8 ether, 0.02e18, "0.0069 ETH at ~2,000 IMD per ETH");
+        uint256 supply6900 = imd6900.totalSupply();
+        uint256 dead = imd.balanceOf(DEAD);
+        vm.prank(carol);
+        uint256 id = names.registerWithImd(_label("paid-in-imd"), carol, due);
+        assertEq(names.ownerOf(id), carol);
+        assertEq(imd.balanceOf(carol), 1_000 ether - due, "exactly the quote, pulled");
+        assertEq(imd.balanceOf(DEAD) - dead, due - due * 690 / 10_000, "93.1% to 0x..dEaD");
+        assertLt(imd6900.totalSupply(), supply6900, "6.9% bought IMD6900, burned");
+        assertEq(imd.balanceOf(address(burner)), 0);
+    }
+
+    function test_RegisterWithImdRespectsMaxImd() public {
+        _imdPayer(carol);
+        uint256 due = burner.quoteImd(0.0069 ether);
+        vm.prank(carol);
+        vm.expectRevert(ILARPNames.TooMuchImd.selector);
+        names.registerWithImd(_label("paid-in-imd"), carol, due - 1);
+    }
+
+    function test_NoImdPaymentWithoutBothPools() public {
+        imd.mint(carol, 1_000 ether);
+        vm.prank(carol);
+        imd.approve(address(names), type(uint256).max);
+        vm.prank(carol);
+        vm.expectRevert(LARPBurner.NoPrice.selector); // only POOL4 has liquidity here: pay in ETH instead
+        names.registerWithImd(_label("paid-in-imd"), carol, 1_000 ether);
+    }
+
+    function test_TheTollInImd() public {
+        _imdPayer(bob);
+        vm.prank(alice);
+        names.transferFrom(alice, bob, kek);
+        uint256 due = burner.quoteImd(names.tollOf(kek));
+        vm.prank(bob);
+        names.linkWithImd(kek, 2, due);
+        assertEq(names.nameOf(2), "kekmaster.imd");
+        assertEq(imd.balanceOf(bob), 1_000 ether - due);
+        assertEq(names.tollOf(kek), 0);
+        // no toll due: nothing is pulled
+        vm.prank(bob);
+        names.linkWithImd(kek, 2, 0);
+        assertEq(imd.balanceOf(bob), 1_000 ether - due);
+    }
+
     // --- linking ---
 
     function test_LinkTheNameToAnIdentity() public {

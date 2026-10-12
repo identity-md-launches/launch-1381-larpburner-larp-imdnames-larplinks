@@ -50,7 +50,22 @@ contract MockIMD is MockERC20 {
     }
 }
 
-/// @dev Adds full-range liquidity to a v4 pool of native ETH and an ERC-20.
+/// @dev IMD6900 for tests: anyone burns their own.
+contract MockIMD6900 is MockERC20 {
+    constructor() {
+        initialize("IMD6900", "IMD6900", 18);
+    }
+
+    function mint(address to, uint256 amount) external {
+        _mint(to, amount);
+    }
+
+    function burn(uint256 amount) external {
+        _burn(msg.sender, amount);
+    }
+}
+
+/// @dev Adds full-range liquidity to a v4 pool (native ETH or ERC-20s), paid by the caller.
 contract LiquidityAdder {
     IPoolManager immutable pm;
 
@@ -71,14 +86,20 @@ contract LiquidityAdder {
             ),
             ""
         );
-        uint256 eth = uint256(uint128(-delta.amount0()));
-        uint256 tokens = uint256(uint128(-delta.amount1()));
-        pm.settle{value: eth}();
-        pm.sync(key.currency1);
-        MockIMD(Currency.unwrap(key.currency1)).transferFrom(payer, address(pm), tokens);
-        pm.settle();
+        _pay(key.currency0, uint256(uint128(-delta.amount0())), payer);
+        _pay(key.currency1, uint256(uint128(-delta.amount1())), payer);
         if (address(this).balance > 0) payable(payer).transfer(address(this).balance);
         return "";
+    }
+
+    function _pay(Currency currency, uint256 amount, address payer) internal {
+        if (Currency.unwrap(currency) == address(0)) {
+            pm.settle{value: amount}();
+        } else {
+            pm.sync(currency);
+            MockIMD(Currency.unwrap(currency)).transferFrom(payer, address(pm), amount);
+            pm.settle();
+        }
     }
 
     receive() external payable {}
@@ -126,10 +147,12 @@ abstract contract Base is Test {
 
     MockNFT identity;
     MockIMD imd;
+    MockIMD6900 imd6900;
     PoolManager pm;
     LiquidityAdder adder;
     V4PoolKey pool4;
     V4PoolKey backup;
+    V4PoolKey pair;
 
     LARPBurner burner;
     LARP larp;
@@ -143,10 +166,12 @@ abstract contract Base is Test {
     address carol = makeAddr("carol");
 
     /// @dev The protocol on a local PoolManager, with POOL4 (1%, spacing 60) and the backup pool (1%, spacing 200)
-    /// initialized at 1 ETH ~ 2,000 IMD and empty.
+    /// at 1 ETH ~ 2,000 IMD, and the IMD6900/IMD pair pool (no fee, spacing 60) at 1 IMD ~ 10,000 IMD6900, all
+    /// initialized and empty.
     function _deploy() internal {
         identity = new MockNFT("identity://");
         imd = new MockIMD();
+        imd6900 = new MockIMD6900();
         pm = new PoolManager(address(this));
         adder = new LiquidityAdder(IPoolManager(address(pm)));
         launcher = new MockLauncher();
@@ -155,14 +180,32 @@ abstract contract Base is Test {
         // tick ~ ln(2000)/ln(1.0001) ~ 76,000
         pm.initialize(pool4, TickMath.getSqrtPriceAtTick(76_020));
         pm.initialize(backup, TickMath.getSqrtPriceAtTick(76_000));
+        bool imdIs0 = address(imd) < address(imd6900);
+        pair = imdIs0
+            ? V4PoolKey(Currency.wrap(address(imd)), Currency.wrap(address(imd6900)), 0, 60, IHooks(address(0)))
+            : V4PoolKey(Currency.wrap(address(imd6900)), Currency.wrap(address(imd)), 0, 60, IHooks(address(0)));
+        // price = currency1 per currency0: 10,000 IMD6900 per IMD (tick ~92,100), or its inverse
+        pm.initialize(pair, TickMath.getSqrtPriceAtTick(imdIs0 ? int24(92_100) : int24(-92_100)));
 
-        burner = new LARPBurner(address(pm), address(imd), 10_000, 60, address(0), 10_000, 200);
+        burner = _newBurner(address(pm));
         larp = new LARP(address(identity));
         names = new LARPNames(address(identity), larp, address(burner), artist);
         links = new LARPLinks(address(identity), address(launcher), larp, names, address(burner));
         imd.mint(address(this), 1e30);
         imd.approve(address(adder), type(uint256).max);
+        imd6900.mint(address(this), 1e33);
+        imd6900.approve(address(adder), type(uint256).max);
         vm.deal(address(this), 10_000 ether);
+    }
+
+    function _newBurner(address poolManager) internal returns (LARPBurner) {
+        return new LARPBurner(
+            poolManager, address(imd), 10_000, 60, address(0), 10_000, 200, address(imd6900), 0, 60, address(0)
+        );
+    }
+
+    function _fillPair() internal {
+        adder.add(pair, 1e23);
     }
 
     function _fillPool4() internal {

@@ -16,13 +16,27 @@ contract LaunchTest is Test {
     address constant POOL4_HOOK = 0xc6C965Bd164c483e87d0B550671798e9A3602840;
     address constant LAUNCHER = 0xfF03410d0Fe5fa8f7F59F743de35E333D9857120;
     address constant ARTIST = 0x35dA9C0303507ddf708E87F2568EdDf12c47a059;
+    address constant IMD6900 = 0x0000198C940D8cD70Cb9ACeC5E3af8216ac57d2F;
+    address constant PAIR_HOOK = 0x667f4621030aCfAfb1bD0B64d33610A8567f2A44;
 
     function _burnerArgs() internal pure returns (bytes memory) {
-        return abi.encode(POOL_MANAGER, IMD, uint24(10_000), int24(60), POOL4_HOOK, uint24(10_000), int24(200));
+        return abi.encode(
+            POOL_MANAGER,
+            IMD,
+            uint24(10_000),
+            int24(60),
+            POOL4_HOOK,
+            uint24(10_000),
+            int24(200),
+            IMD6900,
+            uint24(0),
+            int24(60),
+            PAIR_HOOK
+        );
     }
 
     function _launch() internal returns (LARPBurner burner, LARP larp, LARPNames names, LARPLinks links) {
-        burner = new LARPBurner(POOL_MANAGER, IMD, 10_000, 60, POOL4_HOOK, 10_000, 200);
+        burner = new LARPBurner(POOL_MANAGER, IMD, 10_000, 60, POOL4_HOOK, 10_000, 200, IMD6900, 0, 60, PAIR_HOOK);
         larp = new LARP(IDENTITY);
         names = new LARPNames(IDENTITY, larp, address(burner), ARTIST);
         links = new LARPLinks(IDENTITY, LAUNCHER, larp, names, address(burner));
@@ -30,7 +44,11 @@ contract LaunchTest is Test {
 
     function test_DeploysOnAFreshChain() public {
         // nothing exists at any of these addresses here: the constructors call nothing
-        assertEq(IDENTITY.code.length + POOL_MANAGER.code.length + LAUNCHER.code.length + IMD.code.length, 0);
+        assertEq(
+            IDENTITY.code.length + POOL_MANAGER.code.length + LAUNCHER.code.length + IMD.code.length
+                + IMD6900.code.length,
+            0
+        );
         (LARPBurner burner, LARP larp, LARPNames names, LARPLinks links) = _launch();
         assertEq(address(burner.POOL_MANAGER()), POOL_MANAGER);
         assertEq(burner.IMD(), IMD);
@@ -39,6 +57,10 @@ contract LaunchTest is Test {
         assertEq(burner.POOL4_SPACING(), 60);
         assertEq(burner.BACKUP_FEE(), 10_000);
         assertEq(burner.BACKUP_SPACING(), 200);
+        assertEq(burner.IMD6900(), IMD6900);
+        assertEq(burner.PAIR_FEE(), 0);
+        assertEq(burner.PAIR_SPACING(), 60);
+        assertEq(burner.PAIR_HOOK(), PAIR_HOOK);
         assertEq(larp.IDENTITY(), IDENTITY);
         assertEq(names.IDENTITY(), IDENTITY);
         assertEq(address(names.LARP()), address(larp));

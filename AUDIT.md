@@ -16,6 +16,8 @@ fix. The rest acknowledged and documented.
 | Uniswap v4 PoolManager | nobody (immutable) | — |
 | POOL4 (ETH/$IMD 1%, hook `0xc6C9…`) | IMD's treasury owns the hook (it can `closeMarket`) | the burner falls to route 2 |
 | hookless ETH/$IMD pool (1%, spacing 200) | nobody (no hook); its LPs can withdraw | the ETH waits in the burner; anyone burns it later |
+| IMD6900/$IMD pool (hook `0x667f…2A44`) | the IMD6900 ETH timelock owns the hook | the 6.9% that buys IMD6900 goes to `0x…dEaD` as $IMD instead |
+| IMD6900 (`0x0000198C…`, upgradeable) | the IMD6900 ETH timelock | if its `burn` refuses, the same: the share goes to `0x…dEaD` as $IMD |
 | $IMD (LayerZero OFT, owner `0x047F…`) | IMD's treasury (peers) | $IMD at `0x…dEaD` can never move, whatever the token's owner does |
 | IMD's launcher `distributorOf` | immutable contract; IMD writes the airdrop roots | jeet ranks are only as true as IMD's airdrops; nothing else depends on it |
 | the names' renderer | the artist, until locked | art only; a failing renderer falls back to the built-in card |
@@ -41,6 +43,19 @@ make the swap eat its 63/64 could skip POOL4 for the backup, or park the fee.
 **Test:** `test_JeetsInPages`.
 
 ## Acknowledged
+
+- **L-07 Paying in $IMD uses spot prices.**
+  - **The quote:** `quoteImd` charges the higher of the two pools' spot quotes, and needs both pools live (otherwise
+    pay in ETH).
+  - **Why one pool can't be gamed:** moving POOL4 alone (shallow, concentrated) can never lower the price.
+  - **Moving both:** this means moving the hookless pool too (~600 ETH deep). Their 1% fees each way make that cost
+    about what it saves, even for a batch of names in one transaction.
+- **I-11 The IMD6900 buy is small and bounded.**
+  - **Size:** it is 6.9% of at most 0.1 ETH of $IMD per burn, against the pair pool's 6.9% fee each way, so it isn't
+    worth sandwiching.
+  - **Where its fee goes:** the pair hook keeps its own 6.9% fee as protocol liquidity.
+  - **If it fails:** an empty pair pool, a hook that refuses, or an IMD6900 that won't burn all send the share to
+    `0x…dEaD` (`test_AnEmptyPairPoolMeansItAllBurnsAsIMD`, `test_AnIMD6900ThatWontBurnMeansItAllBurnsAsIMD`).
 
 - **L-03 Name sniping.** A pending `register` can be front-run. There is no commit-reveal, and the sniper pays the full
   price (burned). The site should send registrations through a private mempool.
@@ -69,6 +84,11 @@ make the swap eat its 63/64 could skip POOL4 for the backup, or park the fee.
 
 ## Checked and holding
 
+- **6.9% buys IMD6900, and it is burned.**
+  - **Where it buys:** the IMD6900/$IMD pool, through the real hook's per-trade IMD6900 allowance.
+  - **How it burns:** with IMD6900's own `burn`, so the supply drops.
+  - **On the fork:** a 0.0069 ETH name fee burned 16,849 IMD6900 and sent 1.81 $IMD to `0x…dEaD`.
+  - **Gas:** across gas limits, no call skips the IMD6900 buy (`test_NoGasLimitSkipsARoute`).
 - **The burner's ETH leaves only as a swap.** The sale is exact or nothing; a partial fill reverts the route. $IMD
   goes only to `0x…dEaD`. Only the PoolManager calls back, and only for the burner's own unlock. A transient lock
   refuses a burn inside a burn (`test_NoReentry`).
@@ -86,4 +106,4 @@ make the swap eat its 63/64 could skip POOL4 for the backup, or park the fee.
   (`test/LARPNames.t.sol`: 24 tests.)
 - **Merkle proofs** and **placement bookkeeping** as before (`test_AnInnerNodeIsNotALeaf`, three invariants).
 - **Launch constraints.** The constructors call nothing, and no CALLCODE / DELEGATECALL / SELFDESTRUCT appears anywhere.
-  The four contracts take about 6M gas together, in one transaction (`test/Launch.t.sol`).
+  The four contracts take about 6.9M gas together, in one transaction (`test/Launch.t.sol`).

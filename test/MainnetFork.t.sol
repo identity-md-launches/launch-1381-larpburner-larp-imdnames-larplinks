@@ -16,6 +16,8 @@ interface IERC721Like {
 
 interface IERC20Like {
     function balanceOf(address) external view returns (uint256);
+    function totalSupply() external view returns (uint256);
+    function approve(address, uint256) external returns (bool);
 }
 
 /// @dev The real thing on an Ethereum fork: identity.md, Worker Frens, POOL4, the hookless ETH/$IMD pool, IMD's
@@ -28,6 +30,7 @@ contract MainnetForkTest is Test {
     address constant POOL4_HOOK = 0xc6C965Bd164c483e87d0B550671798e9A3602840;
     address constant DEAD = 0x000000000000000000000000000000000000dEaD;
     address constant ARTIST = 0x35dA9C0303507ddf708E87F2568EdDf12c47a059;
+    address constant PAIR_HOOK = 0x667f4621030aCfAfb1bD0B64d33610A8567f2A44;
     address constant LAUNCHER = 0xfF03410d0Fe5fa8f7F59F743de35E333D9857120;
     address constant WORKER_FRENS = 0x6900d042460d6bdbe68CE994F4dE36706797CCd4;
     address constant TREASURY = 0x0000198C940D8cD70Cb9ACeC5E3af8216ac57d2F;
@@ -43,7 +46,7 @@ contract MainnetForkTest is Test {
         string memory rpc = vm.envOr("MAINNET_RPC_URL", string(""));
         if (bytes(rpc).length == 0) return;
         vm.createSelectFork(rpc);
-        burner = new LARPBurner(POOL_MANAGER, IMD, 10_000, 60, POOL4_HOOK, 10_000, 200);
+        burner = new LARPBurner(POOL_MANAGER, IMD, 10_000, 60, POOL4_HOOK, 10_000, 200, TREASURY, 0, 60, PAIR_HOOK);
         larp = new LARP(IDENTITY);
         names = new LARPNames(IDENTITY, larp, address(burner), ARTIST);
         links = new LARPLinks(IDENTITY, LAUNCHER, larp, names, address(burner));
@@ -82,18 +85,26 @@ contract MainnetForkTest is Test {
         assertEq(larp.faceURI(806), IERC721Like(IDENTITY).tokenURI(806));
     }
 
-    event Burned(uint256 eth, uint256 imd, uint8 route);
+    event Bought(uint256 eth, uint256 imd, uint8 route);
 
     function test_ANameBuysRealIMDOnPool4AndBurnsIt() public forked {
         uint256 before = IERC20Like(IMD).balanceOf(DEAD);
+        uint256 supply6900 = IERC20Like(TREASURY).totalSupply();
+        uint256 pairFees = IERC20Like(TREASURY).balanceOf(PAIR_HOOK);
         vm.deal(TREASURY, 1 ether);
         vm.expectEmit(true, false, true, false, address(burner));
-        emit Burned(0.0069 ether, 0, 0); // route 0: POOL4
+        emit Bought(0.0069 ether, 0, 0); // route 0: POOL4
         vm.prank(TREASURY);
         uint256 id = names.register{value: 0.0069 ether}(_label("imd6900"), TREASURY, 0);
         uint256 burned = IERC20Like(IMD).balanceOf(DEAD) - before;
-        emit log_named_decimal_uint("IMD bought on POOL4 and sent to 0x..dEaD for 0.0069 ETH", burned, 18);
+        uint256 burned6900 = supply6900 - IERC20Like(TREASURY).totalSupply();
+        emit log_named_decimal_uint("IMD bought on POOL4 and sent to 0x..dEaD (93.1%)", burned, 18);
+        emit log_named_decimal_uint(
+            "IMD6900 bought with the other 6.9% on the IMD6900/IMD pool, burned", burned6900, 18
+        );
         assertGt(burned, 0);
+        assertGt(burned6900, 0, "buying pressure on IMD6900, then a real burn");
+        assertGt(IERC20Like(TREASURY).balanceOf(PAIR_HOOK), pairFees, "the pair hook kept its 6.9% fee for liquidity");
         assertEq(address(burner).balance, 0);
         assertEq(names.ownerOf(id), TREASURY);
 
@@ -110,14 +121,31 @@ contract MainnetForkTest is Test {
     /// @dev If POOL4 can't take a fee, the real hookless pool does (here: a burner pointed at a POOL4 that doesn't
     /// exist).
     function test_TheHooklessPoolTakesWhatPool4Cant() public forked {
-        LARPBurner b = new LARPBurner(POOL_MANAGER, IMD, 10_000, 60, address(0x1234), 10_000, 200);
+        LARPBurner b =
+            new LARPBurner(POOL_MANAGER, IMD, 10_000, 60, address(0x1234), 10_000, 200, TREASURY, 0, 60, PAIR_HOOK);
         uint256 before = IERC20Like(IMD).balanceOf(DEAD);
         vm.expectEmit(true, false, true, false, address(b));
-        emit Burned(0.05 ether, 0, 1); // route 1
+        emit Bought(0.05 ether, 0, 1); // route 1
         uint256 got = b.burn{value: 0.05 ether}(0);
         emit log_named_decimal_uint("IMD bought on the hookless pool for 0.05 ETH", got, 18);
         assertGt(got, 0);
-        assertEq(IERC20Like(IMD).balanceOf(DEAD) - before, got);
+        assertEq(IERC20Like(IMD).balanceOf(DEAD) - before, got - got * 690 / 10_000, "93.1% to 0x..dEaD");
+    }
+
+    /// @dev Paying in real $IMD at the two real pools' quote.
+    function test_ANamePaidInRealImd() public forked {
+        address payer = address(0x1dd0000000000000000000000000000000001dD0);
+        uint256 due = burner.quoteImd(0.0069 ether);
+        emit log_named_decimal_uint("a 5+ letter name in IMD now", due, 18);
+        deal(IMD, payer, due);
+        uint256 supply6900 = IERC20Like(TREASURY).totalSupply();
+        vm.startPrank(payer);
+        IERC20Like(IMD).approve(address(names), due);
+        uint256 id = names.registerWithImd(_label("paid-in-imd"), payer, due);
+        vm.stopPrank();
+        assertEq(names.ownerOf(id), payer);
+        assertEq(IERC20Like(IMD).balanceOf(payer), 0);
+        assertLt(IERC20Like(TREASURY).totalSupply(), supply6900);
     }
 
     function test_ACrewBuysAndBurnsRealIMD() public forked {

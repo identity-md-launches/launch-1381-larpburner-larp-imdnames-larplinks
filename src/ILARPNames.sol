@@ -33,6 +33,8 @@ interface ILARPNames {
     error NotArtist();
     /// @notice The renderer is locked for good.
     error Locked();
+    /// @notice The price in $IMD is above the payer's `maxImd`.
+    error TooMuchImd();
 
     /// @notice ".imd"
     function TLD() external view returns (string memory);
@@ -51,10 +53,15 @@ interface ILARPNames {
     /// @notice Registers `label`.imd as an NFT to `to`, paying exactly its price, which buys at least `minImd` $IMD to
     /// burn (0: no minimum; the burn may also wait in the burner). Anyone can register any free name.
     function register(bytes32 label, address to, uint256 minImd) external payable returns (uint256 tokenId);
+    /// @notice `register`, paid in $IMD: the price's worth at the burner's quote (the higher of POOL4's and the
+    /// hookless pool's), at most `maxImd`, pulled from the caller (approve this contract first) and burned.
+    function registerWithImd(bytes32 label, address to, uint256 maxImd) external returns (uint256 tokenId);
     /// @notice Links name `tokenId` to identity `imdId`: the caller controls the identity, whose owner owns the name.
     /// A new owner's first link pays the toll (tollOf), burned like a fee. The identity's old name and the name's old
     /// identity are unlinked.
     function link(uint256 tokenId, uint256 imdId, uint256 minImd) external payable;
+    /// @notice `link`, with any toll paid in $IMD (at most `maxImd`, pulled from the caller and burned).
+    function linkWithImd(uint256 tokenId, uint256 imdId, uint256 maxImd) external;
     /// @notice Unlinks identity `imdId`'s name: its controller or the name's owner can.
     function unlink(uint256 imdId) external;
     /// @notice The caller's primary identity (the reverse record of its wallet), live while it holds it.

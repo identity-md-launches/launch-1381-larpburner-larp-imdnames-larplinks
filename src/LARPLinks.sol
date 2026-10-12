@@ -117,6 +117,7 @@ contract LARPLinks {
 
     error ZeroAddress();
     error WrongPrice();
+    error TooMuchImd();
     error NotYourIdentity();
     error NoSuchIdentity();
     error SelfFren();
@@ -205,8 +206,28 @@ contract LARPLinks {
         payable
         returns (uint256 crewId)
     {
-        _own(captain);
         if (msg.value != CREW_PRICE) revert WrongPrice();
+        crewId = _found(captain, name, open);
+        LARPBurner(payable(BURNER)).burn{value: msg.value}(minImd);
+    }
+
+    /// @notice `foundCrew`, paid in $IMD: CREW_PRICE's worth at the burner's quote, at most `maxImd`, pulled from the
+    /// caller (approve this contract first) and burned.
+    function foundCrewWithImd(uint256 captain, bytes32 name, bool open, uint256 maxImd)
+        external
+        returns (uint256 crewId)
+    {
+        crewId = _found(captain, name, open);
+        LARPBurner burner = LARPBurner(payable(BURNER));
+        uint256 due = burner.quoteImd(CREW_PRICE);
+        if (due > maxImd) revert TooMuchImd();
+        (bool ok, bytes memory r) = burner.IMD().call(abi.encodeWithSelector(0x23b872dd, msg.sender, BURNER, due)); // transferFrom
+        if (!ok || (r.length != 0 && !abi.decode(r, (bool)))) revert WrongPrice();
+        burner.burnImd();
+    }
+
+    function _found(uint256 captain, bytes32 name, bool open) internal returns (uint256 crewId) {
+        _own(captain);
         if (crewOf(captain) != 0) revert InACrew();
         if (Labels.length(name) == 0) revert BadName();
         if (crewByName[name] != 0) revert NameTaken();
@@ -216,7 +237,6 @@ contract LARPLinks {
         _crewOf[captain] = crewId;
         emit CrewFounded(crewId, captain, name, open);
         emit CrewJoined(crewId, captain);
-        LARPBurner(payable(BURNER)).burn{value: msg.value}(minImd);
     }
 
     /// @notice The captain invites identity `imdId` into crew `crewId`, or takes the invitation back.

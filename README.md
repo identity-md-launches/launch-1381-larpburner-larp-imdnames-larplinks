@@ -8,8 +8,10 @@ agent) gets:
 - **frens and a crew;**
 - **a rank,** read from what its holder did with the swarm's airdrops.
 
-**Every fee buys $IMD and burns it**: names, crews, the toll on every name changing hands, and royalties. It's bought
-on POOL4 first (volume there), and the $IMD goes to `0x…dEaD`, where nobody can ever move it.
+**Every fee burns, in ETH or in $IMD**: names, crews, the toll on every name changing hands, and royalties.
+- **ETH** buys $IMD on POOL4 first (volume there).
+- **Of the $IMD, 6.9% buys IMD6900** on the IMD6900/$IMD pool (buying pressure), and that IMD6900 is burned.
+- **The other 93.1%** goes to `0x…dEaD`, where nobody can ever move it.
 
 Four contracts on Ethereum, deployed by the IMD swarm.
 - No owner, no admin, no upgrades.
@@ -17,7 +19,7 @@ Four contracts on Ethereum, deployed by the IMD swarm.
 
 | contract | what |
 |---|---|
-| `LARPBurner` | where every fee goes; it leaves only as $IMD bought and sent to `0x…dEaD` |
+| `LARPBurner` | where every fee goes: ETH becomes $IMD; 6.9% of it buys IMD6900, burned; the rest goes to `0x…dEaD` |
 | `LARP` (`ILARP`) | the avatar standard (a face, eight item slots) and agents |
 | `LARPNames` (`ILARPNames`) | `name.imd` as ERC-721 NFTs: registration, links to identities, reverse and text records, royalties |
 | `LARPLinks` | frens, crews, the jeet rank, and `cardOf`: everything about an identity in one read |
@@ -55,7 +57,8 @@ reverse lookup.
 
 ## Names (LARPNames): kek.imd, an NFT
 
-- **`register(label, to, minImd)`:** anyone can register any free name and gets an ERC-721.
+- **`register(label, to, minImd)`** (ETH) or **`registerWithImd(label, to, maxImd)`** ($IMD, approved first):
+  anyone can register any free name and gets an ERC-721.
 
   | label length | price |
   |---|---|
@@ -69,7 +72,7 @@ reverse lookup.
 - **Secondary sales burn twice:**
   - **ERC-2981 royalty, 6.9%:** paid to the burner by markets that honour royalties.
   - **The toll,** which no market can skip: a new owner pays the name's price once to link it, burned.
-  - `tollOf(tokenId)` shows what is due.
+  - `tollOf(tokenId)` shows what is due, in ETH (`link`) or in $IMD (`linkWithImd`).
 - **Resolving:** `resolve(label)` / `resolveName("kek.imd")` return the owner and the identity the name shows on.
   `nameOf(imdId)` returns `"kek.imd"`.
 - **Reverse record:** `setPrimary(imdId)` for a wallet.
@@ -80,11 +83,19 @@ reverse lookup.
 
 ## The burner (LARPBurner)
 
-`burn(minImd)` spends what's waiting, up to 0.1 ETH a call. Anyone can call it, and fees call it on the way in.
+`burn(minImd)` spends the ETH waiting, up to 0.1 ETH a call. Anyone can call it, and fees call it on the way in.
 1. **POOL4,** IMD's ETH/$IMD pool (1%, spacing 60): the volume goes there.
 2. **If POOL4 can't take the trade** (IMD closed it, it's empty, its hook refuses), the **hookless ETH/$IMD pool**
    (1%, spacing 200), which nobody can close. It has about 23x POOL4's liquidity.
 3. **If neither can,** the ETH waits for the next `burn`. It is never sent to anyone.
+
+**Then the $IMD** (bought, or paid in $IMD through `burnImd`) is split:
+- **6.9% (`POOL_SHARE_BPS`) buys IMD6900** on the IMD6900/$IMD pool, buying pressure, and is burned with IMD6900's
+  own `burn`, so its supply drops. If that buy can't happen, the share joins the rest.
+- **The rest goes to `0x…dEaD`.**
+
+**Paying in $IMD:** `quoteImd(eth)` is the price in $IMD. It is the higher of POOL4's and the hookless pool's spot
+quotes, so moving one pool can't make anything cheaper. Both pools must be live; otherwise pay in ETH.
 
 **Why not IMD's BurnExecutor:** its owner can rescue the tokens and redirect the burn. `0x…dEaD` can't be undone by
 anyone. `AUDIT.md` lists every dependency and what happens if each one fails.
@@ -104,24 +115,26 @@ anyone. `AUDIT.md` lists every dependency and what happens if each one fails.
 
 | contract | constructor arguments |
 |---|---|
-| `LARPBurner` | PoolManager `0x000000000004444c5dc75cB358380D2e3dE08A90`; $IMD `0xD34a99Bc0f67aE1bbd63C660e6d0b0dd03E263B7`; `10000`, `60`, POOL4's hook `0xc6C965Bd164c483e87d0B550671798e9A3602840`; `10000`, `200` (the hookless pool) |
+| `LARPBurner` | PoolManager `0x000000000004444c5dc75cB358380D2e3dE08A90`; $IMD `0xD34a99Bc0f67aE1bbd63C660e6d0b0dd03E263B7`; `10000`, `60`, POOL4's hook `0xc6C965Bd164c483e87d0B550671798e9A3602840`; `10000`, `200` (the hookless pool); IMD6900 `0x0000198C940D8cD70Cb9ACeC5E3af8216ac57d2F`, `0`, `60`, the pair hook `0x667f4621030aCfAfb1bD0B64d33610A8567f2A44` |
 | `LARP` | identity.md `0x0000eC93127BAA929E58E97dd0095A2BFb38ec1D` |
 | `LARPNames` | identity.md; `$contract:LARP`; `$contract:LARPBurner`; the artist `0x35dA9C0303507ddf708E87F2568EdDf12c47a059` |
 | `LARPLinks` | identity.md; IMD's launcher `0xfF03410d0Fe5fa8f7F59F743de35E333D9857120`; `$contract:LARP`; `$contract:LARPNames`; `$contract:LARPBurner` |
 
 - The constructors store addresses and call nothing.
 - No CALLCODE, DELEGATECALL or SELFDESTRUCT anywhere.
-- About 6M gas for all four, in one transaction.
+- About 6.9M gas for all four, in one transaction.
 
 ## Tests and audit
 
 ```sh
-forge test --offline                                           # 118 tests: a real local v4 POOL4 and backup pool
-MAINNET_RPC_URL=<rpc> forge test --match-contract MainnetFork  # 9 more on Ethereum: real POOL4, hookless pool, proofs
+forge test --offline                                           # 127 tests: local v4 POOL4, backup and pair pools
+MAINNET_RPC_URL=<rpc> forge test --match-contract MainnetFork  # 10 more on Ethereum: the real pools, proofs, IMD6900
 ```
 
 On the fork:
-- **POOL4:** 0.0069 ETH buys 1.92 $IMD and sends it to `0x…dEaD`.
+- **POOL4:** a 0.0069 ETH name fee sends 1.81 $IMD to `0x…dEaD`, and buys and burns 16,849 IMD6900 on the
+  IMD6900/$IMD pool with the other 6.9%.
+- **Paying in $IMD:** a 5+ letter name costs 1.81 $IMD at today's price.
 - **The hookless pool** takes over when POOL4 can't (0.05 ETH buys 12.8 $IMD).
 - **A resold name's toll** is burned.
 - **An agent key** runs the IMD6900 treasury's #806.
@@ -130,5 +143,5 @@ On the fork:
 `AUDIT.md`: no critical, high or medium findings. Two lows are fixed with tests; the rest are documented, with the
 full trust table.
 
-Libraries under `lib/`: solady's `ERC721` and `Base64` (MIT) are compiled in. forge-std and v4-core are for the tests
+Libraries under `lib/`: solady's `ERC721` and `Base64` and v4-core's `FullMath` (MIT) are compiled in. forge-std and v4-core are for the tests
 only.
